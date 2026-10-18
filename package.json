@@ -1,0 +1,12 @@
+{
+  "name": "nature-walk-server",
+  "version": "1.0.0",
+  "description": "Игровой сервер Nature Walk: несколько миров, сохранение, WebSocket",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
