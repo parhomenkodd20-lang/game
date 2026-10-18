@@ -2743,13 +2743,22 @@
                 let ws;
                 try { ws = new WebSocket(SERVER_WS); } catch (e) { setTimeout(() => this._emit('error', { type: 'network' }), 0); return; }
                 this.ws = ws;
+                // Если за 20 секунд сервер так и не ответил — не висим вечно, а считаем попытку неудачной и объясняем причину
+                this._ct = setTimeout(() => { if (!this.opened && !this.destroyed && this.ws === ws) { WSPeer.explain('нет ответа от сервера 20 секунд'); try { ws.close(); } catch (_) {} this.destroyed = true; this._emit('error', { type: 'network' }); } }, 20000);
                 ws.onopen = () => ws.send(JSON.stringify({ k: 'hello', world: worldId, host: this.wantHost, tok: PLAYER_TOKEN }));
                 ws.onmessage = (e) => { if (this.ws !== ws) return; let m; try { m = JSON.parse(e.data); } catch (_) { return; } try { this._onMsg(m); } catch (err) { console.error('ws msg', err); } };
-                ws.onerror = () => {};
-                ws.onclose = () => {
+                const failEarly = (code) => { // соединение не открылось (браузер шлёт и error, и close — реагируем один раз)
+                    if (this.opened || this.destroyed || this.ws !== ws || this._failed) return;
+                    this._failed = true; clearTimeout(this._ct); this.disconnected = true;
+                    WSPeer.explain('WebSocket не открылся' + (code ? ' (код ' + code + ')' : ''));
+                    this._emit('error', { type: 'network' });
+                };
+                ws.onerror = () => failEarly(0);
+                ws.onclose = (ev) => {
+                    clearTimeout(this._ct);
                     if (this.destroyed || this.ws !== ws) return;
+                    if (!this.opened) { failEarly(ev && ev.code); return; }
                     this.disconnected = true;
-                    if (!this.opened) { this._emit('error', { type: 'network' }); return; }
                     if (this.hostConn && this.hostConn.open) { this.hostConn.open = false; this.hostConn._emit('close'); }
                     this._emit('disconnected');
                     if (WSPeer.onDrop) WSPeer.onDrop(this);
@@ -2765,7 +2774,7 @@
             destroy() { if (this.destroyed) return; this.destroyed = true; try { this.ws.close(); } catch (_) {} }
             _onMsg(m) {
                 switch (m.k) {
-                    case 'open': this.opened = true; this.id = m.id; this.savedWorld = m.world || null; this._emit('open', m.id); break;
+                    case 'open': clearTimeout(this._ct); WSPeer.diag = ''; this.opened = true; this.id = m.id; this.savedWorld = m.world || null; this._emit('open', m.id); break;
                     case 'err': this._emit('error', { type: m.type }); break;
                     case 'copen': if (this.hostConn) { this.hostConn.open = true; this.hostConn._emit('open'); } break;
                     case 'conn': { const c = new WSConn(this, m.pid, true); this.conns.set(m.pid, c); this._emit('connection', c); c.open = true; c._emit('open'); break; }
@@ -2780,6 +2789,16 @@
                 }
             }
         }
+        // Понятное объяснение, почему не подключилось: заодно проверяем, отвечает ли сервер по обычному HTTPS
+        WSPeer.diag = '';
+        WSPeer.explain = (what) => {
+            WSPeer.diag = what;
+            try {
+                fetch(SERVER_HTTP + '/health', { cache: 'no-store' })
+                    .then(r => { WSPeer.diag = what + (r.ok ? ' · но сервер по HTTPS отвечает, значит мешает именно WebSocket (антивирус, прокси или провайдер)' : ' · сервер ответил ошибкой ' + r.status + ' (возможно, ещё запускается)'); })
+                    .catch(() => { WSPeer.diag = what + ' · сервер недоступен даже по HTTPS: он ещё просыпается (до минуты), не запущен или заблокирован провайдером (попробуй VPN)'; });
+            } catch (_) {}
+        };
         const PeerCtor = USE_WS ? WSPeer : (window.Peer || (window.peerjs && window.peerjs.Peer));
         // Если у игроков разные сети (разные провайдеры, мобильный интернет), прямое соединение часто не проходит —
         // тогда трафик идёт через ретранслятор (TURN). Это бесплатный публичный сервер: может работать нестабильно.
@@ -2853,7 +2872,8 @@
                 'webrtc': 'в этом браузере не работает WebRTC', 'browser-incompatible': 'в этом браузере не работает WebRTC'
             };
             let sub = 'попытка ' + (failStreak + 1) + ' · ' + secs + ' с' + (lastNetError ? ' · ' + lastNetError : '')
-                + (netStage ? '\n' + netStage : '') + (hints[lastNetError] ? '\n' + hints[lastNetError] : '');
+                + (netStage ? '\n' + netStage : '') + (hints[lastNetError] ? '\n' + hints[lastNetError] : '')
+                + (USE_WS ? '\nсервер: ' + GAME_SERVER + (WSPeer.diag ? '\n' + WSPeer.diag : '') : '');
             if (secs > 25) sub += '\nЕсли долго не подключается: закрой остальные вкладки с игрой и подожди минуту —\nстарый «хозяин» комнаты мог ещё не освободить адрес.';
             document.getElementById('net-loader-sub').textContent = sub;
             document.getElementById('net-solo-btn').style.display = secs > 10 ? 'block' : 'none'; // долго не подключается — даём выход
