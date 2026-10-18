@@ -3559,6 +3559,24 @@
             lastSavedJson = json; p.sendRaw({ k: 'save', data });
         }
 
+        // Запасная копия мира в самом браузере: любой игрок раз в 10 секунд запоминает, как выглядит мир (постройки, срубленное).
+        // Если бесплатный сервер перезапустился и «забыл» мир, первый вернувшийся игрок восстанавливает его из своей копии.
+        const worldCacheKey = () => 'nw_cache_' + GAME_SERVER + '_' + worldId;
+        let lastCachedJson = '';
+        function cacheWorldLocally() {
+            if (!USE_WS || !role || soloMode) return;
+            const data = worldPayload(); delete data.cycle;
+            const empty = !data.destroyed.length && !data.foundations.length && !data.walls.length && !data.roofs.length && !data.doors.length && !data.cupboards.length && !data.stairs.length && !data.bags.length;
+            if (empty) return; // пустой мир копией не затираем
+            const json = JSON.stringify(data);
+            if (json === lastCachedJson) return;
+            lastCachedJson = json;
+            try { localStorage.setItem(worldCacheKey(), json); } catch (_) {}
+        }
+        function readLocalWorldCache() {
+            try { const t = localStorage.getItem(worldCacheKey()); return t ? JSON.parse(t) : null; } catch (_) { return null; }
+        }
+
         function becomeHost(gen, p, id) {
             role = 'host'; myId = id; failStreak = 0; lastNetError = ''; hasConnectedOnce = true;
             cycleBase = Date.now() / 1000 - MORNING_START; // свежая комната — снова раннее утро, сколько бы ни длилось подключение
@@ -3586,7 +3604,8 @@
             hostTimer = makeTicker(hostTick, HOST_TICK_MS);
             if (p.isWS) {
                 p.on('snap', handleNetMessage); // позиции игроков приходят от сервера
-                if (p.savedWorld) handleNetMessage({ t: 'welcome', id, players: [], ...p.savedWorld }); // мир с прошлого раза: постройки, срубленные деревья…
+                const restore = p.savedWorld || readLocalWorldCache(); // сначала сохранение с сервера, а если сервер «забыл» мир — копия из этого браузера
+                if (restore) handleNetMessage({ t: 'welcome', id, players: [], ...restore }); // мир с прошлого раза: постройки, срубленные деревья…
                 lastSavedJson = '';
                 saveTicker = makeTicker(() => saveWorldNow(p), 10000);
             }
@@ -3739,8 +3758,10 @@
             }
         }, 1000);
 
+        if (USE_WS) makeTicker(cacheWorldLocally, 10000);
+
         // Закрыли вкладку — сразу закрываем соединения, чтобы остальные не ждали таймаут
-        window.addEventListener('beforeunload', () => { try { saveWorldNow(peer); } catch (_) {} try { if (peer) peer.destroy(); } catch (_) {} });
+        window.addEventListener('beforeunload', () => { try { saveWorldNow(peer); } catch (_) {} try { cacheWorldLocally(); } catch (_) {} try { if (peer) peer.destroy(); } catch (_) {} });
         window.addEventListener('pagehide', () => { try { saveWorldNow(peer); } catch (_) {} try { if (peer) peer.destroy(); } catch (_) {} });
 
         // Начинаем показываться другим игрокам, как только нажали "ИГРАТЬ"
