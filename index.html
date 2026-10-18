@@ -2714,7 +2714,7 @@
         const RESOURCE_ID = /^(tree|rock)_[rc]?\d{1,6}$/; // обычные (tree_5), возродившиеся (rock_r7) и кратерные (rock_c0)
         // ===== Свой игровой сервер (WebSocket). Впиши адрес сюда после запуска на Render, например 'my-game.onrender.com'.
         // Можно и без правки файла: game.html?server=my-game.onrender.com  Пусто = старый режим через PeerJS.
-        const GAME_SERVER_RAW = '';
+        const GAME_SERVER_RAW = 'game-1-nsep.onrender.com';
         const GAME_SERVER = (new URLSearchParams(location.search).get('server') || GAME_SERVER_RAW).trim().replace(/^https?:\/\//, '').replace(/\/+$/, '')
             || (/\.onrender\.com$/.test(location.hostname) ? location.host : '');
         const USE_WS = !!GAME_SERVER && !OFFLINE;
