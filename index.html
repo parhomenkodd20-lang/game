@@ -1076,18 +1076,13 @@
         const brickMat = (() => {
             const cv = document.createElement('canvas'); cv.width = 512; cv.height = 256;
             const c = cv.getContext('2d');
-            c.fillStyle = '#5f5f62'; c.fillRect(0, 0, 512, 256); // раствор между кирпичами
-            let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
-            const gap = 7;
-            for (let row = 0; row < 2; row++) {
-                const off = row ? -128 : 0;
-                for (let i = 0; i < 3; i++) {
-                    const x = off + i * 256, y = row * 128, sh = 150 + Math.floor(rnd() * 34);
-                    c.fillStyle = `rgb(${sh},${sh},${sh + 4})`; c.fillRect(x + gap / 2, y + gap / 2, 256 - gap, 128 - gap);
-                    c.fillStyle = 'rgba(255,255,255,0.10)'; c.fillRect(x + gap / 2, y + gap / 2, 256 - gap, 6); // светлая кромка сверху
-                    c.fillStyle = 'rgba(0,0,0,0.12)'; c.fillRect(x + gap / 2, y + 128 - gap / 2 - 6, 256 - gap, 6);
-                }
-            }
+            c.fillStyle = '#9a9a9a'; c.fillRect(0, 0, 512, 256); // ровная серая стена, как была
+            c.fillStyle = '#111111';
+            const lw = 8;
+            [0, 128].forEach(y => { c.fillRect(0, y - lw / 2, 512, lw); if (y === 0) c.fillRect(0, 256 - lw / 2, 512, lw); }); // линии между рядами
+            const vline = (x, y0, y1) => { c.fillRect(x - lw / 2, y0, lw, y1 - y0); if (x - lw / 2 < 0) c.fillRect(x - lw / 2 + 512, y0, lw, y1 - y0); if (x + lw / 2 > 512) c.fillRect(x - lw / 2 - 512, y0, lw, y1 - y0); };
+            [0, 256].forEach(x => vline(x, 0, 128));      // стыки верхнего ряда
+            [128, 384].forEach(x => vline(x, 128, 256));  // стыки нижнего ряда — со сдвигом
             const tex = new THREE.CanvasTexture(cv);
             tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
             if (THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
