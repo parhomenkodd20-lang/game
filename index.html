@@ -1067,9 +1067,9 @@
         const ROOF_Y_OFFSET = WALL_HEIGHT - WALL_SINK + 0.1; // центр крыши над центром плиты: низ крыши на 5 см заходит в верх стен                                // на сколько основание стены утоплено в плиту
         const EDGE_SNAP_DIST = FOUNDATION_GRID * 0.6;
         const wallMat = new THREE.MeshStandardMaterial({ color: 0x9a6a38, roughness: 0.85 });
-        const roofMat = new THREE.MeshStandardMaterial({ color: 0x7a4e2a, roughness: 0.85 });
+        const roofMat = new THREE.MeshStandardMaterial({ color: 0x7a4e2a, roughness: 0.85, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 2 }); // чуть «отодвинута» в глубину, чтобы не мерцала там, где грань крыши совпадает с гранью стены
         const wallStoneMat = new THREE.MeshStandardMaterial({ color: 0x9a9a9a, roughness: 0.8 });   // стены каменной постройки — серые
-        const roofStoneMat = new THREE.MeshStandardMaterial({ color: 0x7d7d7d, roughness: 0.8 });
+        const roofStoneMat = new THREE.MeshStandardMaterial({ color: 0x7d7d7d, roughness: 0.8, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 2 });
         const walls = new Map();  // id -> { id, x, z, y, rot, door, mesh }
         // Кирпичный узор на внешней стороне каменных стен: крупный кирпич, виден только там, где перед стеной нет фундамента
         const BRICK_W = 1.5, BRICK_H = 0.7;
@@ -1078,7 +1078,7 @@
             const c = cv.getContext('2d');
             c.fillStyle = '#9a9a9a'; c.fillRect(0, 0, 512, 256); // ровная серая стена, как была
             c.fillStyle = '#111111';
-            const lw = 8;
+            const lw = 15;
             [0, 128].forEach(y => { c.fillRect(0, y - lw / 2, 512, lw); if (y === 0) c.fillRect(0, 256 - lw / 2, 512, lw); }); // линии между рядами
             const vline = (x, y0, y1) => { c.fillRect(x - lw / 2, y0, lw, y1 - y0); if (x - lw / 2 < 0) c.fillRect(x - lw / 2 + 512, y0, lw, y1 - y0); if (x + lw / 2 > 512) c.fillRect(x - lw / 2 - 512, y0, lw, y1 - y0); };
             [0, 256].forEach(x => vline(x, 0, 128));      // стыки верхнего ряда
