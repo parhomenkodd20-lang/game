@@ -47,6 +47,18 @@
             display: flex; gap: 30px; align-items: flex-start;
         }
         #tc-panel { width: auto; }
+        #furnace-panel { width: auto; align-items: flex-start; }
+        .furn-row { display: flex; align-items: flex-start; gap: 18px; }
+        .furn-col { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+        .furn-label { font-size: 13px; letter-spacing: 1px; opacity: 0.85; font-weight: 600; }
+        .furn-arrow { font-size: 34px; opacity: 0.7; align-self: center; margin-top: 22px; }
+        #furn-grid { grid-template-columns: repeat(3, 70px); }
+        #furn-status { font-size: 13px; margin: 14px 0 6px; min-height: 18px; opacity: 0.9; }
+        .furn-bar { width: 100%; height: 8px; background: rgba(255,255,255,0.12); border-radius: 4px; overflow: hidden; margin-bottom: 14px; }
+        #furn-bar-fill { height: 100%; width: 0; background: #ff9a2e; transition: width 1s linear; }
+        #furn-btn { padding: 10px 18px; font: 600 15px 'Segoe UI', sans-serif; color: #fff; background: #2d8a5b; border: 0; border-radius: 10px; cursor: pointer; }
+        #furn-btn.on { background: #b3422f; }
+        #furn-btn:hover { filter: brightness(1.12); }
         #tc-info { font-size: 14px; line-height: 1.6; margin-bottom: 14px; text-align: center; }
         .char-panel {
             display: flex; flex-direction: column; align-items: center; gap: 8px;
@@ -239,6 +251,17 @@
                 <div id="tc-info"></div>
                 <div class="inventory-grid" id="tc-grid"></div>
             </div>
+            <div class="crafting-panel" id="furnace-panel" style="display:none;">
+                <div class="crafting-title">🔥 Печь</div>
+                <div class="furn-row">
+                    <div class="furn-col"><div class="furn-label">ДЕРЕВО</div><div class="slot" id="furn-wood"></div></div>
+                    <div class="furn-arrow">➜</div>
+                    <div class="furn-col"><div class="furn-label">РУДА</div><div class="inventory-grid" id="furn-grid"></div></div>
+                </div>
+                <div id="furn-status"></div>
+                <div class="furn-bar"><div id="furn-bar-fill"></div></div>
+                <button id="furn-btn">Включить печь</button>
+            </div>
             <div class="crafting-panel" id="loot-panel" style="display:none;">
                 <div class="crafting-title">🎒 Сумка убитого игрока</div>
                 <div id="loot-grid-wrap"><div class="inventory-grid" id="loot-grid"></div></div>
@@ -286,6 +309,8 @@
         import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 
         let tcOpenId = null; // id шкафа, окно которого сейчас открыто
+        let furnaceOpenId = null; // id печи, окно которой сейчас открыто
+        let draggedFurnaceCell = null; // ячейка печи ('w' — дерево), которую тащим
         const RESOURCE_HP = 10; // «здоровье» дерева и камня; всего с одного можно добыть до 10 (урон инструментов не менялся)
         // --- ПРЕДМЕТЫ И РЕЦЕПТЫ ---
         const ITEMS = {
@@ -293,15 +318,19 @@
             stone: { id: 'stone', icon: '🪨', name: 'Камень', maxStack: 1, isTool: true },
             torch: { id: 'torch', icon: '🔥', name: 'Факел', maxStack: 1, isTool: true },
             stone_material: { id: 'stone_material', icon: '🪨', name: 'Камень', maxStack: 20, isTool: false },
-            iron_material: { id: 'iron_material', icon: '🟤', name: 'Железо', maxStack: 20, isTool: false },
-            sulfur_material: { id: 'sulfur_material', icon: '🟡', name: 'Сера', maxStack: 20, isTool: false },
+            iron_material: { id: 'iron_material', icon: '🟤', name: 'Железная руда', maxStack: 20, isTool: false },
+            metal_material: { id: 'metal_material', icon: '🔩', name: 'Металл', maxStack: 20, isTool: false },
+            sulfur_material: { id: 'sulfur_material', icon: '🟡', name: 'Серная руда', maxStack: 20, isTool: false },
+            sulfur: { id: 'sulfur', icon: '💛', name: 'Сера', maxStack: 20, isTool: false },
+            charcoal: { id: 'charcoal', icon: '⚫', name: 'Уголь', maxStack: 20, isTool: false },
             pickaxe: { id: 'pickaxe', icon: '⛏️', name: 'Кирка', maxStack: 1, isTool: true },
             axe: { id: 'axe', icon: '🪓', name: 'Топор', maxStack: 1, isTool: true },
             mallet: { id: 'mallet', icon: '🔨', name: 'Киянка', maxStack: 1, isTool: true },  // КИЯНКА
             chertyozh: { id: 'chertyozh', icon: '📘', name: 'Чертёж фундамента', maxStack: 1, isTool: true },
             lock: { id: 'lock', icon: '🔒', name: 'Замок', maxStack: 5, isTool: false },
             door: { id: 'door', icon: '🚪', name: 'Дверь', maxStack: 5, isTool: false },
-            cupboard: { id: 'cupboard', icon: '🗄️', name: 'Шкаф', maxStack: 5, isTool: false }
+            cupboard: { id: 'cupboard', icon: '🗄️', name: 'Шкаф', maxStack: 5, isTool: false },
+            furnace: { id: 'furnace', icon: '🏭', name: 'Печь', maxStack: 5, isTool: false }
         };
 
         const RECIPES = [
@@ -339,6 +368,11 @@
                 id: 'cupboard', name: 'Шкаф', icon: '🗄️',
                 ingredients: { wood: 30 },
                 result: { type: 'cupboard', count: 1, icon: '🗄️', isTool: false }
+            },
+            {
+                id: 'furnace', name: 'Печь', icon: '🏭',
+                ingredients: { stone_material: 30, wood: 10 },
+                result: { type: 'furnace', count: 1, icon: '🏭', isTool: false }
             }
         ];
 
@@ -519,6 +553,7 @@
             });
             updateCraftingPanel();
             if (tcOpenId) renderTcPanel();
+            if (furnaceOpenId) renderFurnacePanel();
         }
 
         function updateCraftingPanel() {
@@ -545,12 +580,13 @@
 
         function setupDragEvents(slot, index) {
             slot.draggable = !!gameState.inventory[index];
-            slot.ondragstart = () => { draggedIndex = index; draggedBagIndex = null; draggedTcStack = null; };
-            slot.ondragend = () => { draggedIndex = null; draggedBagIndex = null; draggedTcStack = null; };
+            slot.ondragstart = () => { draggedIndex = index; draggedBagIndex = null; draggedTcStack = null; draggedFurnaceCell = null; };
+            slot.ondragend = () => { draggedIndex = null; draggedBagIndex = null; draggedTcStack = null; draggedFurnaceCell = null; };
             slot.ondragover = (e) => e.preventDefault();
             slot.ondrop = (e) => {
                 e.preventDefault();
                 if (draggedTcStack !== null) { tcTake(draggedTcStack, index); draggedTcStack = null; return; } // перетащили стопку из шкафа
+                if (draggedFurnaceCell !== null) { furnaceTake(draggedFurnaceCell, index); draggedFurnaceCell = null; return; } // из печи
                 if (draggedBagIndex !== null) { // перетащили предмет из сумки в этот слот
                     takeFromBag(draggedBagIndex, index);
                     draggedBagIndex = null;
@@ -975,7 +1011,7 @@
             }
             return null;
         }
-        const pieceMaps = () => ({ foundation: foundations, wall: walls, roof: roofs, door: doors, cupboard: cupboards, stair: stairs });
+        const pieceMaps = () => ({ foundation: foundations, wall: walls, roof: roofs, door: doors, cupboard: cupboards, stair: stairs, furnace: furnaces });
         const dropColliders = (list) => (list || []).forEach(c => { const i = colliders.indexOf(c); if (i >= 0) colliders.splice(i, 1); });
         function samePos(a, b) { return Math.abs(a.x - b.x) < 0.4 && Math.abs(a.z - b.z) < 0.4 && Math.abs(a.y - b.y) < 0.4; }
         function removeDoor(d) { scene.remove(d.mesh); if (d.collider) dropColliders([d.collider]); doors.delete(d.id); }
@@ -986,7 +1022,7 @@
         function removeRoof(r) { scene.remove(r.mesh); roofs.delete(r.id); }
         function applyPieceUpgrade(m) { // улучшаем ТОЛЬКО эту часть: фундамент, стену или крышу
             const rec = (pieceMaps()[m.kind] || new Map()).get(m.id);
-            if (!rec || rec.material === 'stone' || m.kind === 'door' || m.kind === 'cupboard') return;
+            if (!rec || rec.material === 'stone' || m.kind === 'door' || m.kind === 'cupboard' || m.kind === 'furnace') return;
             rec.material = 'stone';
             rec.hp = Math.min(400, (rec.hp || 200) * 2); // у каменных частей 400 ХП
             if (m.kind === 'foundation') applyFoundationMaterial(rec);
@@ -1002,10 +1038,12 @@
             else if (m.kind === 'wall') removeWall(rec);
             else if (m.kind === 'roof') removeRoof(rec);
             else if (m.kind === 'cupboard') removeTc(rec);
+            else if (m.kind === 'furnace') removeFurnace(rec);
             else if (m.kind === 'stair') removeStair(rec);
             else {
                 [...stairs.values()].forEach(st => { if (ownerFoundation(st.x, st.y, st.z, 'wall') === rec) removeStair(st); });
                 [...cupboards.values()].forEach(t => { if (Math.abs(t.x - rec.x) <= 3.1 && Math.abs(t.z - rec.z) <= 3.1 && Math.abs(t.y - (rec.y + 0.35)) < 0.5) removeTc(t); }); // фундамент: всё, что стоит на нём, рушится вместе с ним
+                [...furnaces.values()].forEach(t => { if (Math.abs(t.x - rec.x) <= 3.1 && Math.abs(t.z - rec.z) <= 3.1 && Math.abs(t.y - (rec.y + 0.35)) < 0.5) removeFurnace(t); });
                 [...walls.values()].forEach(w => { if (ownerFoundation(w.x, w.y, w.z, 'wall') === rec) removeWall(w); });
                 [...roofs.values()].forEach(r => { if (ownerFoundation(r.x, r.y, r.z, 'roof') === rec) removeRoof(r); });
                 scene.remove(rec.mesh); dropColliders(rec.colliders); foundations.delete(rec.id);
@@ -1115,6 +1153,8 @@
         }
         function clearWallsAndRoofs() {
             cupboards.forEach(t => scene.remove(t.mesh)); cupboards.clear();
+            furnaces.forEach(t => scene.remove(t.mesh)); furnaces.clear();
+            furnaceOpenId = null;
             stairs.forEach(t => scene.remove(t.mesh)); stairs.clear();
             doors.forEach(d => scene.remove(d.mesh)); doors.clear();
             walls.forEach(w => scene.remove(w.mesh)); walls.clear();
@@ -1358,6 +1398,221 @@
             }
         }
         setInterval(() => { if (tcOpenId && gameState.isInventoryOpen) renderTcPanel(); }, 1000);
+
+        // ---------- печь: плавит руду в металл и серу (дерево — топливо, на каждое сгоревшее дерево появляется уголь) ----------
+        const FURN_CELLS = 6;            // ячеек для руды / металла / серы / угля (общие)
+        const FURN_WOOD_MAX = 20;        // сколько дерева влезает в слот «ДЕРЕВО»
+        const SMELT_S = 3;               // секунд на переплавку одной руды
+        const WOOD_SMELTS = 1.5;         // одно дерево = 1,5 руды
+        const FURN_RECIPES = { iron_material: 'metal_material', sulfur_material: 'sulfur' }; // руда -> результат (1 к 1)
+        const furnaces = new Map();      // id -> { id, x, y, z, rot, mesh, glow, collider, wood, cells[], on, why, pr, burn, prog, createdAt }
+        function buildFurnaceMesh() { // модель из студии
+            const g = new THREE.Group();
+            const solid = (c) => new THREE.MeshLambertMaterial({ color: c, flatShading: true });
+            let m;
+            m = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.5, 1.2), solid(0x7d7d82)); m.position.set(0, 0.4, 0); g.add(m);
+            m = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), solid(0xb08457)); m.position.set(0, 1, 0); m.scale.set(0.95, 1, 1); g.add(m);
+            m = new THREE.Mesh(new THREE.BoxGeometry(0.5, 1.3, 0.5), solid(0xb08457)); m.position.set(0.01, 1.1, 0); g.add(m);
+            m = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.2, 0.6), solid(0xb08457)); m.position.set(0.01, 1.8, 0); g.add(m);
+            m = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.1, 0.4), solid(0x1c1c1e)); m.position.set(0, 1.87, 0); g.add(m);
+            m = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.8, 0.9), solid(0x3a3a3e)); m.position.set(0, 0.7, 0.06); g.add(m);
+            const glow = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.3, 0.03), new THREE.MeshBasicMaterial({ color: 0xff8a1f })); // огонь в топке, виден пока печь работает
+            glow.position.set(0, 0.62, 0.525); glow.visible = false; g.add(glow);
+            return { g, glow };
+        }
+        function cellsAdd(cells, type, n) { // положить n штук в ячейки (сначала доливаем стопки, потом пустые); false — не влезло
+            let rem = n; const max = ITEMS[type].maxStack;
+            for (let i = 0; i < cells.length && rem > 0; i++) if (cells[i] && cells[i].type === type && cells[i].count < max) { const a = Math.min(max - cells[i].count, rem); cells[i].count += a; rem -= a; }
+            for (let i = 0; i < cells.length && rem > 0; i++) if (!cells[i]) { const a = Math.min(max, rem); cells[i] = { type, count: a }; rem -= a; }
+            return rem === 0;
+        }
+        function cleanCells(arr) {
+            const out = [];
+            for (let i = 0; i < FURN_CELLS; i++) { const c = Array.isArray(arr) ? arr[i] : null; out.push(c && hasItemType(c.type) && Number.isInteger(c.count) && c.count > 0 ? { type: c.type, count: Math.min(c.count, ITEMS[c.type].maxStack) } : null); }
+            return out;
+        }
+        function applyFurnaceSet(m) {
+            if (!m || typeof m.id !== 'string' || !isNum(m.x, 2000) || !isNum(m.y, 500) || !isNum(m.z, 2000)) return;
+            if (m.cid) pendingBuilds.delete(m.cid);
+            if (furnaces.has(m.id)) return;
+            const { g, glow } = buildFurnaceMesh();
+            g.position.set(m.x, m.y, m.z); g.rotation.y = m.rot || 0;
+            g.userData.b = { kind: 'furnace' };
+            scene.add(g);
+            const collider = { rect: true, x: m.x, z: m.z, rot: m.rot || 0, halfLen: 0.62, halfThick: 0.62, yBottom: m.y - 0.4, yTop: m.y + 2.0 };
+            colliders.push(collider);
+            const f = { id: m.id, x: m.x, y: m.y, z: m.z, rot: m.rot || 0, mesh: g, glow, collider, wood: Math.max(0, Math.min(FURN_WOOD_MAX, m.wood | 0)),
+                cells: cleanCells(m.cells), on: !!m.on, why: '', pr: 0, burn: typeof m.burn === 'number' ? m.burn : 0, prog: 0,
+                createdAt: typeof m.createdAt === 'number' ? m.createdAt : Date.now() };
+            glow.visible = f.on;
+            furnaces.set(f.id, f);
+        }
+        function removeFurnace(f) {
+            scene.remove(f.mesh); dropColliders([f.collider]); furnaces.delete(f.id);
+            if (furnaceOpenId === f.id) { furnaceOpenId = null; if (gameState.isInventoryOpen) closeInventory(); }
+        }
+        function furnaceStateMsg(f) { return { t: 'furnacestate', id: f.id, wood: f.wood, cells: f.cells, on: f.on, why: f.why || '', pr: Math.min(1, (f.prog || 0) / SMELT_S) }; }
+        function applyFurnaceState(m) {
+            const f = furnaces.get(m.id); if (!f) return;
+            f.wood = Math.max(0, Math.min(FURN_WOOD_MAX, m.wood | 0)); f.cells = cleanCells(m.cells);
+            f.on = !!m.on; f.why = typeof m.why === 'string' ? m.why : ''; f.pr = isNum(m.pr, 1) ? m.pr : 0;
+            f.glow.visible = f.on;
+            if (furnaceOpenId === f.id) renderFurnacePanel();
+        }
+        // Хозяин: одна переплавка. dry — только проверить, можно ли. Возвращает 'ok' | 'noore' | 'nowood' | 'noroom'
+        function furnaceSmelt(f, dry) {
+            const oi = f.cells.findIndex(c => c && FURN_RECIPES[c.type]);
+            if (oi < 0) return 'noore';
+            const needWood = (f.burn || 0) < 1 - 1e-9;
+            if (needWood && f.wood <= 0) return 'nowood';
+            const sim = cleanCells(f.cells);
+            const product = FURN_RECIPES[sim[oi].type];
+            sim[oi].count--; if (sim[oi].count <= 0) sim[oi] = null;
+            if (!cellsAdd(sim, product, 1)) return 'noroom';
+            if (needWood && !cellsAdd(sim, 'charcoal', 1)) return 'noroom';
+            if (dry) return 'ok';
+            f.cells = sim;
+            if (needWood) { f.wood--; f.burn = (f.burn || 0) + WOOD_SMELTS; }
+            f.burn -= 1;
+            return 'ok';
+        }
+        function furnaceSpill(f) { // печь разрушили — содержимое падает сумкой
+            const items = []; if (f.wood > 0) items.push({ type: 'wood', count: f.wood });
+            f.cells.forEach(c => { if (c) items.push({ type: c.type, count: c.count }); });
+            if (items.length) hostAll({ t: 'bagset', id: 'bf_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), x: f.x, z: f.z, items });
+        }
+        let furnLast = performance.now();
+        function furnaceTick() {
+            const now = performance.now();
+            const dt = Math.min(5, (now - furnLast) / 1000); furnLast = now;
+            if (role !== 'host') return;
+            furnaces.forEach(f => {
+                if (!f.on) return;
+                f.prog = (f.prog || 0) + dt;
+                while (f.on && f.prog >= SMELT_S) {
+                    const r = furnaceSmelt(f, false);
+                    if (r === 'ok') { f.prog -= SMELT_S; f.why = ''; }
+                    else { f.prog = SMELT_S; if (r === 'noroom') f.why = 'noroom'; else { f.on = false; f.why = r; f.prog = 0; } break; }
+                }
+                hostAll(furnaceStateMsg(f));
+            });
+        }
+        makeTicker(furnaceTick, 1000);
+
+        const furnWoodEl = document.getElementById('furn-wood');
+        const furnGridEl = document.getElementById('furn-grid');
+        const furnBtnEl = document.getElementById('furn-btn');
+        const furnStatusEl = document.getElementById('furn-status');
+        const furnBarEl = document.getElementById('furn-bar-fill');
+        function openFurnace(f) {
+            gameState.attackCooldown = 0.35;
+            openInventory(null, null, f.id);
+        }
+        function furnacePutFromInventory(slotKind) { // бросили предмет из рюкзака на дерево или ячейки печи
+            const idx = draggedIndex; draggedIndex = null;
+            const f = furnaces.get(furnaceOpenId);
+            if (!f || idx === null || !gameState.inventory[idx]) return;
+            const item = gameState.inventory[idx];
+            if (slotKind === 'wood' ? item.type !== 'wood' : !FURN_RECIPES[item.type]) return;
+            const amount = slotKind === 'wood' ? Math.min(item.count, FURN_WOOD_MAX - f.wood) : item.count;
+            if (amount <= 0) return;
+            const type = item.type;
+            item.count -= amount; if (item.count <= 0) gameState.inventory[idx] = null;
+            updateUI();
+            netSend({ t: 'fput', id: f.id, slot: slotKind, type, amount });
+        }
+        function furnaceTake(slot, toIdx) { // из печи — в рюкзак (slot: 'w' — дерево или номер ячейки)
+            const f = furnaces.get(furnaceOpenId); if (!f) return;
+            const st = slot === 'w' ? (f.wood > 0 ? { type: 'wood', count: f.wood } : null) : f.cells[slot];
+            if (!st || !canFit(st.type, st.count)) return;
+            netSend({ t: 'ftake', id: f.id, slot: slot === 'w' ? 'wood' : slot, to: Number.isInteger(toIdx) ? toIdx : undefined });
+        }
+        furnWoodEl.ondragover = (e) => e.preventDefault();
+        furnWoodEl.ondrop = (e) => { e.preventDefault(); furnacePutFromInventory('wood'); };
+        furnGridEl.ondragover = (e) => e.preventDefault();
+        furnGridEl.ondrop = (e) => { e.preventDefault(); furnacePutFromInventory('cells'); };
+        furnBtnEl.onclick = () => { if (furnaceOpenId) netSend({ t: 'ftoggle', id: furnaceOpenId }); };
+        function furnSlotFill(el, it, key) {
+            el.innerHTML = ''; el.draggable = !!it; el.onclick = null; el.ondragstart = null; el.ondragend = null;
+            if (!it) return;
+            const def = ITEMS[it.type];
+            el.innerHTML = `<span>${def.icon}</span>${it.count > 1 ? `<span class="count">${it.count}</span>` : ''}<span class="item-name">${def.name}</span>`;
+            el.ondragstart = () => { draggedFurnaceCell = key; draggedIndex = null; draggedBagIndex = null; draggedTcStack = null; };
+            el.ondragend = () => { draggedFurnaceCell = null; draggedIndex = null; };
+            el.onclick = () => furnaceTake(key);
+        }
+        function renderFurnacePanel() {
+            const f = furnaces.get(furnaceOpenId);
+            if (!f) return;
+            let status;
+            if (f.on) status = f.why === 'noroom' ? '⚠️ Нет места в ячейках — плавка ждёт' : '🔥 Печь работает';
+            else if (f.why === 'noore') status = 'Нет руды для плавки';
+            else if (f.why === 'nowood') status = 'Нет дерева — печь остановилась';
+            else status = 'Печь выключена';
+            furnStatusEl.textContent = status;
+            furnBtnEl.textContent = f.on ? 'Выключить печь' : 'Включить печь';
+            furnBtnEl.classList.toggle('on', f.on);
+            furnBarEl.style.width = (f.on && f.why !== 'noroom' ? Math.round(f.pr * 100) : 0) + '%';
+            const sig = f.id + '|' + f.wood + '|' + f.cells.map(c => c ? c.type + c.count : '-').join(',');
+            if (furnGridEl.dataset.sig === sig) return; // перерисовываем только при изменении — иначе обрывается перетаскивание
+            furnGridEl.dataset.sig = sig;
+            furnSlotFill(furnWoodEl, f.wood > 0 ? { type: 'wood', count: f.wood } : null, 'w');
+            furnGridEl.innerHTML = '';
+            for (let i = 0; i < FURN_CELLS; i++) {
+                const slot = document.createElement('div'); slot.className = 'slot';
+                furnSlotFill(slot, f.cells[i], i);
+                furnGridEl.appendChild(slot);
+            }
+        }
+        setInterval(() => { if (furnaceOpenId && gameState.isInventoryOpen) renderFurnacePanel(); }, 1000);
+
+        // Печь в руках: ставится на землю или на фундамент, лицом к игроку
+        function updateFurnaceGhost(dt) {
+            camera.getWorldDirection(_fwdVec);
+            const rot = Math.round(Math.atan2(-_fwdVec.x, -_fwdVec.z) / (Math.PI / 2)) * (Math.PI / 2);
+            raycaster.setFromCamera(center, camera);
+            const targets = []; foundations.forEach(f => targets.push(f.mesh));
+            const hits = raycaster.intersectObjects(targets, true);
+            let px = 0, pz = 0, y = 0, found = false, reason = '';
+            if (hits.length && hits[0].distance <= FOUNDATION_PLACE_MAX) {
+                const hp = hits[0].point;
+                for (const f of foundations.values()) {
+                    if (Math.abs(hp.x - f.x) <= FOUNDATION_GRID / 2 + 0.1 && Math.abs(hp.z - f.z) <= FOUNDATION_GRID / 2 + 0.1 && Math.abs(hp.y - (f.y + 0.35)) < 0.8) {
+                        px = THREE.MathUtils.clamp(hp.x, f.x - 2.2, f.x + 2.2); pz = THREE.MathUtils.clamp(hp.z, f.z - 2.2, f.z + 2.2); y = f.y + 0.35; found = true; break;
+                    }
+                }
+            }
+            if (!found) { // идём лучом взгляда до земли
+                const o = camera.position;
+                for (let d = 1; d <= 8; d += 0.2) {
+                    const x = o.x + _fwdVec.x * d, z = o.z + _fwdVec.z * d, gy = getTerrainHeight(x, z);
+                    if (o.y + _fwdVec.y * d <= gy) { px = x; pz = z; y = gy; found = true; break; }
+                }
+                if (found && [...foundations.values()].some(f => Math.abs(px - f.x) <= 3.2 && Math.abs(pz - f.z) <= 3.2)) { found = false; reason = 'Ставь печь на фундамент или рядом'; }
+                else if (!found) reason = 'Посмотри на землю или фундамент';
+            }
+            let valid = found;
+            if (found) {
+                const dup = [...furnaces.values(), ...cupboards.values()].some(t => Math.hypot(t.x - px, t.z - pz) < 1.8 && Math.abs(t.y - y) < 1);
+                if (dup) { valid = false; reason = 'Здесь уже что-то стоит'; }
+                else if (tcBlocked(px, pz, myId)) { valid = false; reason = 'Зона шкафа: сначала открой тот шкаф (ЛКМ по нему)'; }
+            }
+            if (found) { smoothGhostTo(furnaceGhost, px, y, pz, dt); furnaceGhost.rotation.y = rot; }
+            else { furnaceGhost.position.copy(camera.position).addScaledVector(_fwdVec, 4); furnaceGhost.rotation.y = rot; }
+            ghostValid = valid; ghostPlace = found ? { kind: 'furnace', x: px, y, z: pz, rot } : null;
+            setGhostMat(furnaceGhost, valid ? foundationGhostMat : foundationGhostBadMat);
+            buildHintEl.textContent = reason;
+            buildHintEl.style.display = reason ? 'block' : 'none';
+        }
+        function placeFurnace() {
+            if (!ghostPlace || ghostPlace.kind !== 'furnace' || !ghostValid || gameState.attackCooldown > 0) return false;
+            gameState.attackCooldown = 0.35;
+            removeFromInventory('furnace', 1); updateUI();
+            const cid = 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+            netSend({ t: 'build', kind: 'furnace', x: ghostPlace.x, y: ghostPlace.y, z: ghostPlace.z, rot: ghostPlace.rot, cid });
+            return true;
+        }
+        function isHoldingFurnaceItem() { const it = gameState.inventory[gameState.selectedSlot]; return !!(it && it.type === 'furnace'); }
 
         // Плашка слева сверху, пока игрок в радиусе шкафа: зелёная — зарегистрирован, красная — строить нельзя
         const tcBadgeEl = document.createElement('div');
@@ -1674,6 +1929,7 @@
         }
         const doorGhost = buildDoorMesh(foundationGhostMat, foundationGhostMat); doorGhost.visible = false; scene.add(doorGhost);
         const tcGhost = buildCupboardMesh(foundationGhostMat, foundationGhostMat, foundationGhostMat); tcGhost.visible = false; scene.add(tcGhost);
+        const furnaceGhost = buildFurnaceMesh().g; furnaceGhost.visible = false; scene.add(furnaceGhost);
         const stairGhost = buildStairMesh(foundationGhostMat, foundationGhostMat); stairGhost.visible = false; scene.add(stairGhost);
         const roofGhost = new THREE.Mesh(new THREE.BoxGeometry(FOUNDATION_GRID, 0.3, FOUNDATION_GRID), foundationGhostMat);
         roofGhost.visible = false; scene.add(roofGhost);
@@ -1691,6 +1947,8 @@
             const holdingDoor = !!(currentItem && currentItem.type === 'door' && controls.isLocked && !netLoading());
             const holdingTc = !!(currentItem && currentItem.type === 'cupboard' && controls.isLocked && !netLoading());
             tcGhost.visible = holdingTc;
+            const holdingFurnace = !!(currentItem && currentItem.type === 'furnace' && controls.isLocked && !netLoading());
+            furnaceGhost.visible = holdingFurnace;
             const holding = !!(currentItem && currentItem.type === 'chertyozh' && controls.isLocked && !netLoading());
             foundationGhost.visible = holding && buildMode === 'foundation';
             wallGhost.visible = holding && (buildMode === 'wall' || buildMode === 'door' || buildMode === 'window');
@@ -1699,6 +1957,7 @@
             doorGhost.visible = holdingDoor;
             if (holdingDoor) { updateDoorGhost(dt); return; }
             if (holdingTc) { updateTcGhost(dt); return; }
+            if (holdingFurnace) { updateFurnaceGhost(dt); return; }
             if (!holding) { ghostPlace = null; ghostSmoothPos = null; buildHintEl.style.display = 'none'; return; }
 
             camera.getWorldDirection(_fwdVec);
@@ -2274,12 +2533,12 @@
             repairWheelEl.appendChild(el); repairSegs[mode] = el;
         });
         function isHoldingMallet() { const it = gameState.inventory[gameState.selectedSlot]; return !!(it && it.type === 'mallet'); }
-        const PIECE_NAMES = { foundation: 'фундамент', wall: 'стену', roof: 'крышу', door: 'дверь', cupboard: 'шкаф', stair: 'лестницу' };
-        const PIECE_TITLES = { foundation: 'Фундамент', wall: 'Стена', roof: 'Крыша', door: 'Дверь', cupboard: 'Шкаф', stair: 'Лестница' };
+        const PIECE_NAMES = { foundation: 'фундамент', wall: 'стену', roof: 'крышу', door: 'дверь', cupboard: 'шкаф', stair: 'лестницу', furnace: 'печь' };
+        const PIECE_TITLES = { foundation: 'Фундамент', wall: 'Стена', roof: 'Крыша', door: 'Дверь', cupboard: 'Шкаф', stair: 'Лестница', furnace: 'Печь' };
         function aimedPiece(doorsOnly) {
             raycaster.setFromCamera(center, camera);
             const targets = [];
-            doors.forEach(d => targets.push(d.mesh)); cupboards.forEach(t => targets.push(t.mesh));
+            doors.forEach(d => targets.push(d.mesh)); cupboards.forEach(t => targets.push(t.mesh)); furnaces.forEach(t => targets.push(t.mesh));
             if (!doorsOnly) { foundations.forEach(f => targets.push(f.mesh)); walls.forEach(w => targets.push(w.mesh)); roofs.forEach(r => targets.push(r.mesh)); stairs.forEach(t => targets.push(t.mesh)); }
             const hits = raycaster.intersectObjects(targets, true);
             if (!hits.length || hits[0].distance > 7) return null;
@@ -2301,7 +2560,7 @@
             const left = DEMOLISH_WINDOW_MS - (Date.now() - f.createdAt);
             const pending = pendingBuilds.has(f.id);
             const name = PIECE_NAMES[t.kind];
-            const noUp = t.kind === 'door' || t.kind === 'cupboard';
+            const noUp = t.kind === 'door' || t.kind === 'cupboard' || t.kind === 'furnace';
             const up = { ok: !noUp && f.material !== 'stone' && have >= UPGRADE_STONE_COST && !pending };
             if (noUp) up.text = '🪨 Улучшить<br>не улучшается';
             else if (f.material === 'stone') up.text = '🪨 Уже каменная';
@@ -2349,12 +2608,14 @@
             }
             if (e.button === 0 && !wheelOpen && !repairOpen && !netLoading() && isHoldingDoorItem() && placeDoor()) return; // дверь в руках — ставим в проём
             if (e.button === 0 && !wheelOpen && !repairOpen && !netLoading() && isHoldingTcItem() && placeCupboard()) return; // шкаф в руках — ставим на фундамент
+            if (e.button === 0 && !wheelOpen && !repairOpen && !netLoading() && isHoldingFurnaceItem() && placeFurnace()) return; // печь в руках — ставим
             if (e.button === 0 && !wheelOpen && !repairOpen && gameState.attackCooldown <= 0 && !netLoading() && !isHoldingBlueprint()) {
                 const mallet = isHoldingMallet();
                 const piece = aimedPiece(!mallet); // киянка видит любую часть, остальные предметы — только двери
                 if (piece) {
                     if (mallet) { openRepairWheel(piece); return; }  // колесо: улучшить / разрушить
                     if (piece.kind === 'cupboard') openCupboard(piece.rec); // ЛКМ по шкафу — открыть (и зарегистрироваться)
+                    else if (piece.kind === 'furnace') openFurnace(piece.rec); // ЛКМ по печи — открыть окно печи
                     else useDoor(piece.rec); return;                        // ЛКМ по двери — открыть/закрыть (или поставить замок)
                 }
             }
@@ -3109,23 +3370,27 @@
             charRenderer.render(charScene, charCam);
         })(performance.now());
 
-        function openInventory(bagId, tcId) {
+        function openInventory(bagId, tcId, furnaceId) {
             gameState.isInventoryOpen = true;
             lootBagId = bagId || null;
             tcOpenId = tcId || null;
+            furnaceOpenId = furnaceId || null;
             keys.w = keys.a = keys.s = keys.d = false;
-            document.getElementById('crafting-panel').style.display = (lootBagId || tcOpenId) ? 'none' : 'flex';
+            document.getElementById('crafting-panel').style.display = (lootBagId || tcOpenId || furnaceOpenId) ? 'none' : 'flex';
+            document.getElementById('furnace-panel').style.display = furnaceOpenId ? 'flex' : 'none';
             document.getElementById('tc-panel').style.display = tcOpenId ? 'flex' : 'none';
             document.getElementById('loot-panel').style.display = lootBagId ? 'flex' : 'none';
             document.getElementById('inventory-overlay').style.display = 'flex';
             controls.unlock();
             updateUI();
             if (lootBagId) renderLoot();
+            if (furnaceOpenId) renderFurnacePanel();
         }
         function closeInventory() {
             if (lootBagId) lootLatchId = lootBagId; // пока смотришь на эту сумку — заново не откроется
             lootBagId = null;
             tcOpenId = null;
+            furnaceOpenId = null;
             gameState.isInventoryOpen = false;
             document.getElementById('inventory-overlay').style.display = 'none';
             // вернуть мышь в игру можно только сразу после действия игрока; иначе покажем меню «ИГРАТЬ»
@@ -3266,6 +3531,7 @@
                     (msg.roofs || []).forEach(applyRoofSet);
                     (msg.doors || []).forEach(applyDoorSet);
                     (msg.cupboards || []).forEach(applyTcSet);
+                    (msg.furnaces || []).forEach(applyFurnaceSet);
                     (msg.stairs || []).forEach(applyStairSet);
                     updateOnlineCount();
                     break;
@@ -3288,6 +3554,8 @@
                 case 'doorlock': { const d = doors.get(msg.id); if (d && !d.locked) { setDoorLocked(d, msg.owner); if (msg.owner === myId) { removeFromInventory('lock', 1); updateUI(); } } break; }
                 case 'doorstate': { const d = doors.get(msg.id); if (d) setDoorOpen(d, msg.open); break; }
                 case 'tcset': applyTcSet(msg); break;
+                case 'furnaceset': applyFurnaceSet(msg); break;
+                case 'furnacestate': applyFurnaceState(msg); break;
                 case 'respawn': applyRespawn(msg); break;
                 case 'pong': if (typeof msg.ts === 'number') pingMs = Math.max(0, Math.round(performance.now() - msg.ts)); break;
                 case 'stairset': applyStairSet(msg); break;
@@ -3438,6 +3706,11 @@
                         const fnd = [...foundations.values()].find(f => Math.abs(m.x - f.x) <= 2.2 && Math.abs(m.z - f.z) <= 2.2 && Math.abs(m.y - (f.y + 0.35)) < 0.3);
                         const dup = [...cupboards.values()].some(t => Math.hypot(t.x - m.x, t.z - m.z) < 1.6 && Math.abs(t.y - m.y) < 1);
                         if (fnd && !dup) hostAll({ t: 'tcset', id: 't_' + (++foundationSeq) + '_' + Math.floor(Math.random() * 1e6), x: m.x, y: m.y, z: m.z, rot: isNum(m.rot, 10) ? m.rot : 0, wood: 0, stone: 0, registered: [fromId], createdAt: Date.now(), cid });
+                    } else if (m.kind === 'furnace') {
+                        const fnd = [...foundations.values()].find(f => Math.abs(m.x - f.x) <= 2.2 && Math.abs(m.z - f.z) <= 2.2 && Math.abs(m.y - (f.y + 0.35)) < 0.3);
+                        const groundOk = Math.abs(m.y - getTerrainHeight(m.x, m.z)) < 0.6 && ![...foundations.values()].some(f => Math.abs(m.x - f.x) <= 3.2 && Math.abs(m.z - f.z) <= 3.2);
+                        const dup = [...furnaces.values(), ...cupboards.values()].some(t => Math.hypot(t.x - m.x, t.z - m.z) < 1.8 && Math.abs(t.y - m.y) < 1);
+                        if ((fnd || groundOk) && !dup) hostAll({ t: 'furnaceset', id: 'u_' + (++foundationSeq) + '_' + Math.floor(Math.random() * 1e6), x: m.x, y: m.y, z: m.z, rot: isNum(m.rot, 10) ? m.rot : 0, wood: 0, cells: [], on: false, burn: 0, createdAt: Date.now(), cid });
                     } else if (m.kind === 'stair') {
                         const fnd = [...foundations.values()].find(f => Math.abs(m.x - f.x) < 0.6 && Math.abs(m.z - f.z) < 0.6 && Math.abs(m.y - f.y) < 0.3);
                         const dup = [...stairs.values()].some(st => Math.hypot(st.x - m.x, st.z - m.z) < 0.6 && Math.abs(st.y - m.y) < 0.3);
@@ -3459,12 +3732,12 @@
                 }
                 case 'upgrade': { // улучшить в камень отдельную часть: фундамент, стену или крышу
                     const rec = typeof m.id === 'string' ? (pieceMaps()[m.kind] || new Map()).get(m.id) : null;
-                    if (rec && m.kind !== 'door' && m.kind !== 'cupboard' && rec.material !== 'stone' && !tcBlocked(rec.x, rec.z, fromId)) hostAll({ t: 'pieceupg', kind: m.kind, id: rec.id, by: fromId });
+                    if (rec && m.kind !== 'door' && m.kind !== 'cupboard' && m.kind !== 'furnace' && rec.material !== 'stone' && !tcBlocked(rec.x, rec.z, fromId)) hostAll({ t: 'pieceupg', kind: m.kind, id: rec.id, by: fromId });
                     break;
                 }
                 case 'demolish': { // разрушить — только если эта часть не старше 3 минут (проверяет хозяин)
                     const rec = typeof m.id === 'string' ? (pieceMaps()[m.kind] || new Map()).get(m.id) : null;
-                    if (rec && Date.now() - rec.createdAt <= DEMOLISH_WINDOW_MS && !tcBlocked(rec.x, rec.z, fromId)) hostAll({ t: 'piecedel', kind: m.kind, id: rec.id });
+                    if (rec && Date.now() - rec.createdAt <= DEMOLISH_WINDOW_MS && !tcBlocked(rec.x, rec.z, fromId)) { if (m.kind === 'furnace') furnaceSpill(rec); hostAll({ t: 'piecedel', kind: m.kind, id: rec.id }); }
                     break;
                 }
                 case 'lock': { // поставить замок на дверь — владельцем станет тот, кто поставил
@@ -3509,6 +3782,36 @@
                     hostAll({ t: 'tcstock', id: t.id, wood: t.wood, stone: t.stone });
                     break;
                 }
+                case 'fput': { // положить в печь дерево или руду (предмет уже убран у игрока; лишнее возвращаем)
+                    const f = typeof m.id === 'string' ? furnaces.get(m.id) : null;
+                    const amt = Number.isInteger(m.amount) ? m.amount : 0;
+                    if (amt < 1 || amt > 20 || !hasItemType(m.type)) break;
+                    const near = !!f && !tcBlocked(f.x, f.z, fromId) && !(p.state && Math.hypot(p.state.x - f.x, p.state.z - f.z) > 16);
+                    let left = amt;
+                    if (near && m.slot === 'wood' && m.type === 'wood') { const add = Math.min(left, FURN_WOOD_MAX - f.wood); f.wood += add; left -= add; }
+                    else if (near && m.slot === 'cells' && FURN_RECIPES[m.type]) { const sim = f.cells.slice(); while (sim.length < FURN_CELLS) sim.push(null); let k = 0; while (k < left && cellsAdd(sim, m.type, 1)) k++; f.cells = sim; left -= k; }
+                    if (left > 0) sendTo(fromId, { t: 'given', type: m.type, count: left });
+                    if (left < amt) hostAll(furnaceStateMsg(f));
+                    break;
+                }
+                case 'ftake': { // забрать из печи стопку (дерево или ячейку)
+                    const f = typeof m.id === 'string' ? furnaces.get(m.id) : null;
+                    if (!f || tcBlocked(f.x, f.z, fromId) || (p.state && Math.hypot(p.state.x - f.x, p.state.z - f.z) > 16)) break;
+                    const to = Number.isInteger(m.to) && m.to >= 0 && m.to < 25 ? m.to : undefined;
+                    if (m.slot === 'wood') { if (f.wood < 1) break; const n = f.wood; f.wood = 0; sendTo(fromId, { t: 'given', type: 'wood', count: n, to }); }
+                    else if (Number.isInteger(m.slot) && f.cells[m.slot]) { const c = f.cells[m.slot]; f.cells[m.slot] = null; sendTo(fromId, { t: 'given', type: c.type, count: c.count, to }); }
+                    else break;
+                    hostAll(furnaceStateMsg(f));
+                    break;
+                }
+                case 'ftoggle': { // включить / выключить печь
+                    const f = typeof m.id === 'string' ? furnaces.get(m.id) : null;
+                    if (!f || tcBlocked(f.x, f.z, fromId) || (p.state && Math.hypot(p.state.x - f.x, p.state.z - f.z) > 16)) break;
+                    if (f.on) { f.on = false; f.why = ''; }
+                    else { const r = furnaceSmelt(f, true); if (r === 'ok' || r === 'noroom') { f.on = true; f.why = r === 'noroom' ? 'noroom' : ''; } else f.why = r; }
+                    hostAll(furnaceStateMsg(f));
+                    break;
+                }
                 case 'ping': if (typeof m.ts === 'number') sendTo(fromId, { t: 'pong', ts: m.ts }); break; // отвечаем, чтобы клиент мог измерить пинг
             }
         }
@@ -3545,6 +3848,7 @@
                 roofs: [...roofs.values()].map(r => ({ id: r.id, x: r.x, y: r.y, z: r.z, material: r.material, createdAt: r.createdAt, hp: r.hp })),
                 doors: [...doors.values()].map(d => ({ id: d.id, x: d.x, y: d.y, z: d.z, rot: d.rot, open: d.open, locked: d.locked, owner: d.owner, createdAt: d.createdAt, hp: d.hp })),
                 cupboards: [...cupboards.values()].map(t => ({ id: t.id, x: t.x, y: t.y, z: t.z, rot: t.rot, wood: t.wood, stone: t.stone, registered: t.registered, createdAt: t.createdAt })),
+                furnaces: [...furnaces.values()].map(f => ({ id: f.id, x: f.x, y: f.y, z: f.z, rot: f.rot, wood: f.wood, cells: f.cells, on: f.on, burn: f.burn, createdAt: f.createdAt })),
                 stairs: [...stairs.values()].map(st => ({ id: st.id, x: st.x, y: st.y, z: st.z, rot: st.rot, material: st.material, createdAt: st.createdAt, hp: st.hp })),
                 spawned: [...resources.values()].filter(r => r.spawn && !r.gone).map(r => r.spawn)
             };
@@ -3566,7 +3870,7 @@
         function cacheWorldLocally() {
             if (!USE_WS || !role || soloMode) return;
             const data = worldPayload(); delete data.cycle;
-            const empty = !data.destroyed.length && !data.foundations.length && !data.walls.length && !data.roofs.length && !data.doors.length && !data.cupboards.length && !data.stairs.length && !data.bags.length;
+            const empty = !data.destroyed.length && !data.foundations.length && !data.walls.length && !data.roofs.length && !data.doors.length && !data.cupboards.length && !data.furnaces.length && !data.stairs.length && !data.bags.length;
             if (empty) return; // пустой мир копией не затираем
             const json = JSON.stringify(data);
             if (json === lastCachedJson) return;
