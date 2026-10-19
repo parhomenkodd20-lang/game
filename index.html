@@ -55,7 +55,7 @@
         #furn-grid { grid-template-columns: repeat(3, 70px); }
         #furn-status { font-size: 13px; margin: 14px 0 6px; min-height: 18px; opacity: 0.9; }
         .furn-bar { width: 100%; height: 8px; background: rgba(255,255,255,0.12); border-radius: 4px; overflow: hidden; margin-bottom: 14px; }
-        #furn-bar-fill { height: 100%; width: 0; background: #ff9a2e; transition: width 1s linear; }
+        #furn-bar-fill { height: 100%; width: 0; background: #ff9a2e; }
         #furn-btn { padding: 10px 18px; font: 600 15px 'Segoe UI', sans-serif; color: #fff; background: #2d8a5b; border: 0; border-radius: 10px; cursor: pointer; }
         #furn-btn.on { background: #b3422f; }
         #furn-btn:hover { filter: brightness(1.12); }
@@ -986,7 +986,7 @@
             if (foundations.has(m.id)) return;
             const mesh = createFoundationMesh(m.x, m.y, m.z);
             mesh.userData.b = { kind: 'foundation', x: m.x, y: m.y, z: m.z };
-            const colliderObj = { x: m.x, z: m.z, radius: FOUNDATION_GRID * 0.72, foundation: true, topY: m.y };
+            const colliderObj = { rect: true, foundation: true, floor: true, x: m.x, z: m.z, rot: 0, halfLen: FOUNDATION_GRID / 2 + 0.02, halfThick: FOUNDATION_GRID / 2 + 0.02, yBottom: m.y - 0.35, yTop: m.y + 0.35, stepTol: 0.45, edge: 0.2 }; // плита: точный квадрат, верх — по меш-плите
             colliders.push(colliderObj);
             const material = m.material === 'stone' ? 'stone' : 'wood';
             const createdAt = typeof m.createdAt === 'number' ? m.createdAt : Date.now();
@@ -1019,7 +1019,7 @@
             scene.remove(w.mesh); dropColliders(w.colliders); walls.delete(w.id);
             [...doors.values()].forEach(d => { if (samePos(d, w)) removeDoor(d); });
         }
-        function removeRoof(r) { scene.remove(r.mesh); roofs.delete(r.id); }
+        function removeRoof(r) { scene.remove(r.mesh); dropColliders(r.colliders); roofs.delete(r.id); }
         function applyPieceUpgrade(m) { // улучшаем ТОЛЬКО эту часть: фундамент, стену или крышу
             const rec = (pieceMaps()[m.kind] || new Map()).get(m.id);
             if (!rec || rec.material === 'stone' || m.kind === 'door' || m.kind === 'cupboard' || m.kind === 'furnace') return;
@@ -1028,7 +1028,7 @@
             if (m.kind === 'foundation') applyFoundationMaterial(rec);
             else if (m.kind === 'wall') setBuildingMat(rec.mesh, wallStoneMat);
             else if (m.kind === 'roof') setBuildingMat(rec.mesh, roofStoneMat);
-            else if (m.kind === 'stair') setBuildingMat(rec.mesh, wallStoneMat);
+            else if (m.kind === 'stair') setStairStone(rec.mesh);
             if (m.by && m.by === myId) { removeFromInventory('stone_material', UPGRADE_STONE_COST); updateUI(); }
         }
         function applyPieceDelete(m) {
@@ -1148,7 +1148,9 @@
             const mesh = createRoofMesh(m.x, m.y, m.z);
             mesh.userData.b = { kind: 'roof' };
             const material = m.material === 'stone' ? 'stone' : 'wood';
-            roofs.set(m.id, { hp: typeof m.hp === 'number' ? m.hp : (material === 'stone' ? 400 : 200), id: m.id, x: m.x, y: m.y, z: m.z, mesh, material, createdAt: typeof m.createdAt === 'number' ? m.createdAt : Date.now() });
+            const roofCol = { rect: true, roof: true, floor: true, ceil: true, x: m.x, z: m.z, rot: 0, halfLen: FOUNDATION_GRID / 2, halfThick: FOUNDATION_GRID / 2, yBottom: m.y - 0.15, yTop: m.y + 0.15, stepTol: STEP_UP, edge: 0.2 };
+            colliders.push(roofCol);
+            roofs.set(m.id, { hp: typeof m.hp === 'number' ? m.hp : (material === 'stone' ? 400 : 200), id: m.id, x: m.x, y: m.y, z: m.z, mesh, colliders: [roofCol], material, createdAt: typeof m.createdAt === 'number' ? m.createdAt : Date.now() });
             if (material === 'stone') setBuildingMat(mesh, roofStoneMat);
         }
         function clearWallsAndRoofs() {
@@ -1159,7 +1161,7 @@
             doors.forEach(d => scene.remove(d.mesh)); doors.clear();
             walls.forEach(w => scene.remove(w.mesh)); walls.clear();
             roofs.forEach(r => scene.remove(r.mesh)); roofs.clear();
-            for (let i = colliders.length - 1; i >= 0; i--) if (colliders[i].rect) colliders.splice(i, 1);
+            for (let i = colliders.length - 1; i >= 0; i--) if (colliders[i].rect && !colliders[i].foundation) colliders.splice(i, 1);
         }
         // Угловые/боковые точки фундамента — четыре стороны плиты, где может стоять стена
         // Сдвинуто внутрь на половину толщины стены, чтобы стена не высовывалась наружу за грань плиты
@@ -1400,9 +1402,10 @@
         setInterval(() => { if (tcOpenId && gameState.isInventoryOpen) renderTcPanel(); }, 1000);
 
         // ---------- печь: плавит руду в металл и серу (дерево — топливо, на каждое сгоревшее дерево появляется уголь) ----------
+        const FURN_SCALE = 1.35;         // печь крупнее исходной модели
         const FURN_CELLS = 6;            // ячеек для руды / металла / серы / угля (общие)
         const FURN_WOOD_MAX = 20;        // сколько дерева влезает в слот «ДЕРЕВО»
-        const SMELT_S = 3;               // секунд на переплавку одной руды
+        const SMELT_S = 6;               // секунд на переплавку одной руды
         const WOOD_SMELTS = 1.5;         // одно дерево = 1,5 руды
         const FURN_RECIPES = { iron_material: 'metal_material', sulfur_material: 'sulfur' }; // руда -> результат (1 к 1)
         const furnaces = new Map();      // id -> { id, x, y, z, rot, mesh, glow, collider, wood, cells[], on, why, pr, burn, prog, createdAt }
@@ -1418,6 +1421,7 @@
             m = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.8, 0.9), solid(0x3a3a3e)); m.position.set(0, 0.7, 0.06); g.add(m);
             const glow = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.3, 0.03), new THREE.MeshBasicMaterial({ color: 0xff8a1f })); // огонь в топке, виден пока печь работает
             glow.position.set(0, 0.62, 0.525); glow.visible = false; g.add(glow);
+            g.scale.setScalar(FURN_SCALE);
             return { g, glow };
         }
         function cellsAdd(cells, type, n) { // положить n штук в ячейки (сначала доливаем стопки, потом пустые); false — не влезло
@@ -1439,10 +1443,10 @@
             g.position.set(m.x, m.y, m.z); g.rotation.y = m.rot || 0;
             g.userData.b = { kind: 'furnace' };
             scene.add(g);
-            const collider = { rect: true, x: m.x, z: m.z, rot: m.rot || 0, halfLen: 0.62, halfThick: 0.62, yBottom: m.y - 0.4, yTop: m.y + 2.0 };
+            const collider = { rect: true, x: m.x, z: m.z, rot: m.rot || 0, halfLen: 0.62 * FURN_SCALE, halfThick: 0.62 * FURN_SCALE, yBottom: m.y - 0.4, yTop: m.y + 2.0 * FURN_SCALE };
             colliders.push(collider);
             const f = { id: m.id, x: m.x, y: m.y, z: m.z, rot: m.rot || 0, mesh: g, glow, collider, wood: Math.max(0, Math.min(FURN_WOOD_MAX, m.wood | 0)),
-                cells: cleanCells(m.cells), on: !!m.on, why: '', pr: 0, burn: typeof m.burn === 'number' ? m.burn : 0, prog: 0,
+                cells: cleanCells(m.cells), on: !!m.on, why: '', pr: 0, prStamp: performance.now(), burn: typeof m.burn === 'number' ? m.burn : 0, prog: 0,
                 createdAt: typeof m.createdAt === 'number' ? m.createdAt : Date.now() };
             glow.visible = f.on;
             furnaces.set(f.id, f);
@@ -1456,7 +1460,7 @@
             const f = furnaces.get(m.id); if (!f) return;
             f.wood = Math.max(0, Math.min(FURN_WOOD_MAX, m.wood | 0)); f.cells = cleanCells(m.cells);
             f.on = !!m.on; f.why = typeof m.why === 'string' ? m.why : ''; f.pr = isNum(m.pr, 1) ? m.pr : 0;
-            f.glow.visible = f.on;
+            f.glow.visible = f.on; f.prStamp = performance.now();
             if (furnaceOpenId === f.id) renderFurnacePanel();
         }
         // Хозяин: одна переплавка. dry — только проверить, можно ли. Возвращает 'ok' | 'noore' | 'nowood' | 'noroom'
@@ -1479,7 +1483,7 @@
         function furnaceSpill(f) { // печь разрушили — содержимое падает сумкой
             const items = []; if (f.wood > 0) items.push({ type: 'wood', count: f.wood });
             f.cells.forEach(c => { if (c) items.push({ type: c.type, count: c.count }); });
-            if (items.length) hostAll({ t: 'bagset', id: 'bf_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), x: f.x, z: f.z, items });
+            if (items.length) hostAll({ t: 'bagset', id: 'bf_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), x: f.x, y: f.y + 1.5, z: f.z, items });
         }
         let furnLast = performance.now();
         function furnaceTick() {
@@ -1488,22 +1492,24 @@
             if (role !== 'host') return;
             furnaces.forEach(f => {
                 if (!f.on) return;
-                f.prog = (f.prog || 0) + dt;
+                f.prog = (f.prog || 0) + dt; f.bc = (f.bc || 0) + dt;
+                let changed = false;
                 while (f.on && f.prog >= SMELT_S) {
                     const r = furnaceSmelt(f, false);
-                    if (r === 'ok') { f.prog -= SMELT_S; f.why = ''; }
-                    else { f.prog = SMELT_S; if (r === 'noroom') f.why = 'noroom'; else { f.on = false; f.why = r; f.prog = 0; } break; }
+                    if (r === 'ok') { f.prog -= SMELT_S; f.why = ''; changed = true; }
+                    else { f.prog = SMELT_S; if (r === 'noroom') { if (f.why !== 'noroom') { f.why = 'noroom'; changed = true; } } else { f.on = false; f.why = r; f.prog = 0; changed = true; } break; }
                 }
-                hostAll(furnaceStateMsg(f));
+                if (changed || f.bc >= 1) { f.bc = 0; hostAll(furnaceStateMsg(f)); } // раз в секунду и при каждой переплавке — полоска на экране идёт сама между обновлениями
             });
         }
-        makeTicker(furnaceTick, 1000);
+        makeTicker(furnaceTick, 100);
 
         const furnWoodEl = document.getElementById('furn-wood');
         const furnGridEl = document.getElementById('furn-grid');
         const furnBtnEl = document.getElementById('furn-btn');
         const furnStatusEl = document.getElementById('furn-status');
         const furnBarEl = document.getElementById('furn-bar-fill');
+        let furnBarStamp = 0;
         function openFurnace(f) {
             gameState.attackCooldown = 0.35;
             openInventory(null, null, f.id);
@@ -1552,7 +1558,12 @@
             furnStatusEl.textContent = status;
             furnBtnEl.textContent = f.on ? 'Выключить печь' : 'Включить печь';
             furnBtnEl.classList.toggle('on', f.on);
-            furnBarEl.style.width = (f.on && f.why !== 'noroom' ? Math.round(f.pr * 100) : 0) + '%';
+            if (!(f.on && f.why !== 'noroom')) { furnBarEl.style.transition = 'none'; furnBarEl.style.width = '0%'; furnBarStamp = 0; }
+            else if (furnBarStamp !== f.prStamp) { // пришло новое состояние — полоска плавно доезжает до конца ровно к моменту переплавки
+                furnBarStamp = f.prStamp;
+                furnBarEl.style.transition = 'none'; furnBarEl.style.width = Math.round(f.pr * 100) + '%'; void furnBarEl.offsetWidth;
+                furnBarEl.style.transition = 'width ' + Math.max(0.05, (1 - f.pr) * SMELT_S).toFixed(2) + 's linear'; furnBarEl.style.width = '100%';
+            }
             const sig = f.id + '|' + f.wood + '|' + f.cells.map(c => c ? c.type + c.count : '-').join(',');
             if (furnGridEl.dataset.sig === sig) return; // перерисовываем только при изменении — иначе обрывается перетаскивание
             furnGridEl.dataset.sig = sig;
@@ -1569,7 +1580,7 @@
         // Печь в руках: ставится на землю или на фундамент, лицом к игроку
         function updateFurnaceGhost(dt) {
             camera.getWorldDirection(_fwdVec);
-            const rot = Math.round(Math.atan2(-_fwdVec.x, -_fwdVec.z) / (Math.PI / 2)) * (Math.PI / 2);
+            const rot = Math.round(Math.atan2(-_fwdVec.x, -_fwdVec.z) / (Math.PI / 2)) * (Math.PI / 2) + placeRotAdd();
             raycaster.setFromCamera(center, camera);
             const targets = []; foundations.forEach(f => targets.push(f.mesh));
             const hits = raycaster.intersectObjects(targets, true);
@@ -1593,7 +1604,7 @@
             }
             let valid = found;
             if (found) {
-                const dup = [...furnaces.values(), ...cupboards.values()].some(t => Math.hypot(t.x - px, t.z - pz) < 1.8 && Math.abs(t.y - y) < 1);
+                const dup = [...furnaces.values(), ...cupboards.values()].some(t => Math.hypot(t.x - px, t.z - pz) < 2.1 && Math.abs(t.y - y) < 1);
                 if (dup) { valid = false; reason = 'Здесь уже что-то стоит'; }
                 else if (tcBlocked(px, pz, myId)) { valid = false; reason = 'Зона шкафа: сначала открой тот шкаф (ЛКМ по нему)'; }
             }
@@ -1869,6 +1880,10 @@
         const stairBodyMat = new THREE.MeshStandardMaterial({ color: 0x7f5329, roughness: 0.85 });
         const stairTopMat = new THREE.MeshStandardMaterial({ color: 0xb98750, roughness: 0.8 });
         // Раскладка в локальных координатах (y=0 — верх плиты, +z — к игроку): первый марш слева идёт вперёд, площадка сзади, второй марш справа идёт назад
+        const stairStoneTopMat = new THREE.MeshStandardMaterial({ color: 0xb4b4b4, roughness: 0.8 });
+        function setStairStone(mesh) { // каменная лестница: серые ступени со светлыми площадками
+            mesh.traverse(o => { if (o.isMesh) o.material = (o.geometry.parameters && o.geometry.parameters.height === 0.06) ? stairStoneTopMat : wallStoneMat; });
+        }
         function stairLayout() {
             // марши стоят вплотную друг к другу и к стенам клетки (внутренняя грань стен — 2.6), никаких щелей
             const out = [], d = 0.74, w = 2.6;
@@ -1900,7 +1915,7 @@
             mesh.userData.b = { kind: 'stair' };
             scene.add(mesh);
             const cols = stairLayout().map(p => ({
-                rect: true, step: true, rot, halfLen: p.hw, halfThick: p.hd,
+                rect: true, step: true, floor: true, stepTol: STEP_UP, edge: 0, rot, halfLen: p.hw, halfThick: p.hd,
                 x: m.x + p.cx * cs + p.cz * sn, z: m.z - p.cx * sn + p.cz * cs,
                 yBottom: m.y, yTop: m.y + 0.35 + p.top
             }));
@@ -1908,7 +1923,7 @@
             const material = m.material === 'stone' ? 'stone' : 'wood';
             const rec = { hp: typeof m.hp === 'number' ? m.hp : (material === 'stone' ? 400 : 200), id: m.id, x: m.x, y: m.y, z: m.z, rot, mesh, colliders: cols, material, createdAt: typeof m.createdAt === 'number' ? m.createdAt : Date.now() };
             stairs.set(m.id, rec);
-            if (material === 'stone') setBuildingMat(mesh, wallStoneMat);
+            if (material === 'stone') setStairStone(mesh);
         }
         function removeStair(st) { scene.remove(st.mesh); dropColliders(st.colliders); stairs.delete(st.id); }
 
@@ -1938,6 +1953,8 @@
             obj.traverse(o => { if (o.isMesh) o.material = mat; });
         }
 
+        let placeRotStep = 0; // поворот ставящихся предметов на R (в четвертях круга)
+        const placeRotAdd = () => placeRotStep * Math.PI / 2;
         const pendingBuilds = new Set(); // временные id своих же построек, пока хозяин не подтвердил официальный id
 
         function updateBuildGhost(currentItem, dt) {
@@ -2044,7 +2061,7 @@
                         const d = Math.hypot(rawPoint.x - f.x, rawPoint.z - f.z); if (d < bestDist) { bestDist = d; best = f; }
                     }
                 });
-                const rot = Math.round(Math.atan2(-_fwdVec.x, -_fwdVec.z) / (Math.PI / 2)) * (Math.PI / 2); // вход лестницы — к тебе
+                const rot = Math.round(Math.atan2(-_fwdVec.x, -_fwdVec.z) / (Math.PI / 2)) * (Math.PI / 2) + placeRotAdd(); // вход лестницы — к тебе, плюс поворот на R
                 if (best) {
                     smoothGhostTo(stairGhost, best.x, best.y + 0.35, best.z, dt); stairGhost.rotation.y = rot;
                     const dupe = [...stairs.values()].some(st => Math.hypot(st.x - best.x, st.z - best.z) < 0.6 && Math.abs(st.y - best.y) < 0.3);
@@ -2106,7 +2123,7 @@
             const targets = []; foundations.forEach(f => targets.push(f.mesh));
             const hits = raycaster.intersectObjects(targets, true);
             let reason = '', fnd = null, px = 0, pz = 0;
-            const rot = Math.round(Math.atan2(-_fwdVec.x, -_fwdVec.z) / (Math.PI / 2)) * (Math.PI / 2); // лицом к игроку, по сетке 90°
+            const rot = Math.round(Math.atan2(-_fwdVec.x, -_fwdVec.z) / (Math.PI / 2)) * (Math.PI / 2) + placeRotAdd(); // лицом к игроку, по сетке 90°, плюс поворот на R
             if (hits.length && hits[0].distance <= FOUNDATION_PLACE_MAX) {
                 const hp = hits[0].point;
                 for (const f of foundations.values()) {
@@ -2404,6 +2421,10 @@
             if (e.code === 'KeyE' && !e.repeat) { // KeyE — это и «E», и «У» на русской раскладке
                 if (gameState.isInventoryOpen) { if (lootBagId) closeInventory(); }
                 else if (controls.isLocked && !netLoading()) { const id = nearestBagId(); if (id) openInventory(id); }
+            }
+            if (e.code === 'KeyR' && !e.repeat && controls.isLocked && !gameState.isInventoryOpen && !netLoading()) { // R — повернуть шкаф, печь или лестницу в руках на 90°
+                const it = gameState.inventory[gameState.selectedSlot];
+                if (it && (it.type === 'cupboard' || it.type === 'furnace' || (it.type === 'chertyozh' && buildMode === 'stair'))) placeRotStep = (placeRotStep + 1) % 4;
             }
             if (e.code === 'KeyG' && !e.repeat && !netLoading()) toggleMap(); // KeyG — это и «G», и «П» на русской раскладке
             if (gameState.isInventoryOpen) return;
@@ -3185,7 +3206,7 @@
             // 1) всё содержимое инвентаря уходит в сумку на месте смерти
             const items = [];
             gameState.inventory.forEach(sl => { if (sl) items.push({ type: sl.type, count: sl.count }); });
-            netSend({ t: 'bag', x: r2(camera.position.x), z: r2(camera.position.z), items });
+            netSend({ t: 'bag', x: r2(camera.position.x), y: r2(camera.position.y - 2.5), z: r2(camera.position.z), items });
             netSend({ t: 'died', x: r2(camera.position.x), y: r2(camera.position.y), z: r2(camera.position.z) }); // остальные сразу убирают тело
 
             // 2) новая жизнь: камень и факел, полное здоровье, случайное место на пляже
@@ -3264,12 +3285,26 @@
         // ---------- сумки ----------
         // Сумка — просто коричневый прямоугольник, который падает на землю
         const bagMat = new THREE.MeshStandardMaterial({ color: 0x8a5a2b, roughness: 0.95 });
-        function createBagMesh(id, x, z, drop) {
+        // Самая высокая поверхность-«пол» под точкой (плита, крыша, ступень): top не выше ref+tol. null — только земля
+        function floorTopAt(px, pz, ref, tolOverride, edgeOverride) {
+            let best = null;
+            for (const c of colliders) {
+                if (!c.floor) continue;
+                const dx = px - c.x, dz = pz - c.z, cs = Math.cos(-c.rot), sn = Math.sin(-c.rot);
+                const lx = dx * cs - dz * sn, lz = dx * sn + dz * cs;
+                const e = edgeOverride !== undefined ? edgeOverride : (c.edge || 0);
+                if (Math.abs(lx) > c.halfLen + e || Math.abs(lz) > c.halfThick + e) continue;
+                if (ref >= c.yTop - (tolOverride !== undefined ? tolOverride : (c.stepTol || 0.35)) && (best === null || c.yTop > best)) best = c.yTop;
+            }
+            return best;
+        }
+        function createBagMesh(id, x, z, drop, y) {
             const g = new THREE.Group();
             const box = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.8, 0.7), bagMat);
             box.position.y = 0.4; box.castShadow = true; g.add(box);
             const ground = getTerrainHeight(x, z);
-            g.position.set(x, drop ? ground + 3 : ground, z);
+            const startY = typeof y === 'number' ? y + (drop ? 0.6 : 0) : (drop ? ground + 3 : ground);
+            g.position.set(x, startY, z);
             g.userData.groundY = ground; g.userData.fallV = 0;
             g.rotation.y = Math.random() * Math.PI * 2;
             g.userData.bagId = id;
@@ -3278,18 +3313,22 @@
         }
         function updateBags(dt) {
             bags.forEach(b => {
-                const u = b.mesh.userData;
-                if (b.mesh.position.y > u.groundY) {
+                const u = b.mesh.userData, my = b.mesh.position.y;
+                let ground = getTerrainHeight(b.x, b.z);
+                const ft = floorTopAt(b.x, b.z, my + 0.05 - u.fallV * dt, 0.1, 0.1); // плиты, крыши, ступени: сумка ложится сверху, а не проваливается
+                if (ft !== null && ft > ground) ground = ft;
+                u.groundY = ground;
+                if (my > ground + 0.001) {
                     u.fallV += 18 * dt;
-                    b.mesh.position.y = Math.max(u.groundY, b.mesh.position.y - u.fallV * dt);
-                }
+                    b.mesh.position.y = Math.max(ground, my - u.fallV * dt);
+                } else { u.fallV = 0; if (my < ground && ground - my < 0.6) b.mesh.position.y = ground; }
             });
         }
         function applyBagSet(m, fresh) {
             if (!m || typeof m.id !== 'string' || !isNum(m.x, 2000) || !isNum(m.z, 2000) || !Array.isArray(m.items)) return;
             const items = m.items.slice(0, 25).map(sanitizeItem);
             let b = bags.get(m.id);
-            if (!b) { b = { id: m.id, x: m.x, z: m.z, items, mesh: createBagMesh(m.id, m.x, m.z, !!fresh), created: performance.now() }; bags.set(m.id, b); }
+            if (!b) { b = { id: m.id, x: m.x, z: m.z, items, mesh: createBagMesh(m.id, m.x, m.z, !!fresh, isNum(m.y, 500) ? m.y : undefined), created: performance.now() }; bags.set(m.id, b); }
             else b.items = items;
             if (lootBagId === m.id) renderLoot();
         }
@@ -3402,7 +3441,7 @@
             let best = null, bd = LOOT_RANGE;
             bags.forEach(b => {
                 const d = Math.hypot(camera.position.x - b.x, camera.position.z - b.z);
-                if (d <= bd && Math.abs(camera.position.y - getTerrainHeight(b.x, b.z)) < 6) { bd = d; best = b.id; }
+                if (d <= bd && Math.abs((camera.position.y - 2.5) - b.mesh.position.y) < 6) { bd = d; best = b.id; }
             });
             return best;
         }
@@ -3681,7 +3720,7 @@
                     if (now - (p.lastBag || 0) < 1500) return; p.lastBag = now;
                     const items = m.items.slice(0, 25).map(sanitizeItem).filter(Boolean);
                     if (!items.length) return;
-                    hostAll({ t: 'bagset', id: 'bag_' + (++bagSeq) + '_' + Math.floor(Math.random() * 1e6), x: m.x, z: m.z, items });
+                    hostAll({ t: 'bagset', id: 'bag_' + (++bagSeq) + '_' + Math.floor(Math.random() * 1e6), x: m.x, y: isNum(m.y, 500) ? m.y : undefined, z: m.z, items });
                     break;
                 }
                 case 'take': { // игрок забирает предмет из сумки
@@ -3693,7 +3732,7 @@
                     b.items[m.slot] = null;
                     sendTo(fromId, { t: 'given', type: it.type, count: it.count, to: (Number.isInteger(m.to) && m.to >= 0 && m.to < 25) ? m.to : undefined });
                     if (b.items.every(x => !x)) hostAll({ t: 'bagdel', id: b.id });
-                    else hostAll({ t: 'bagset', id: b.id, x: b.x, z: b.z, items: b.items });
+                    else hostAll({ t: 'bagset', id: b.id, x: b.x, y: b.mesh.position.y, z: b.z, items: b.items });
                     break;
                 }
                 case 'build': { // игрок что-то строит: фундамент, стену/проём или крышу
@@ -3842,7 +3881,7 @@
             return {
                 cycle: cycleTime,
                 hits: currentHits(), destroyed: currentDestroyed(),
-                bags: [...bags.values()].map(b => ({ id: b.id, x: b.x, z: b.z, items: b.items })),
+                bags: [...bags.values()].map(b => ({ id: b.id, x: b.x, y: b.mesh.position.y, z: b.z, items: b.items })),
                 foundations: [...foundations.values()].map(f => ({ id: f.id, x: f.x, y: f.y, z: f.z, material: f.material, createdAt: f.createdAt, hp: f.hp })),
                 walls: [...walls.values()].map(w => ({ id: w.id, x: w.x, y: w.y, z: w.z, rot: w.rot, variant: w.variant, material: w.material, createdAt: w.createdAt, hp: w.hp })),
                 roofs: [...roofs.values()].map(r => ({ id: r.id, x: r.x, y: r.y, z: r.z, material: r.material, createdAt: r.createdAt, hp: r.hp })),
@@ -4335,77 +4374,90 @@
                 const playerRadius = 0.6;
                 const feetY = camera.position.y - 2.5;
 
-                function blockedAt(px, pz) {
-                    for (let c of colliders) {
-                        if (c.rect) {
-                            if (feetY >= c.yTop - (c.step ? STEP_UP : 0.2)) continue; // верхний этаж — стена ниже нас; на ступень можно шагнуть
-                            if (feetY < c.yBottom - 1.6) continue; // мы гораздо ниже этой стены (например, под приподнятым фундаментом) — не мешает
-                            const dx = px - c.x, dz = pz - c.z;
-                            const cos = Math.cos(-c.rot), sin = Math.sin(-c.rot);
-                            const lx = dx * cos - dz * sin, lz = dx * sin + dz * cos;
-                            const pr = c.step ? 0.28 : playerRadius; // у ступеней контур почти точный, иначе соседняя ступень выше не даст взойти
-                            if (Math.abs(lx) < c.halfLen + pr && Math.abs(lz) < c.halfThick + pr) return true;
-                            continue;
+                const PLAYER_H = 2.7; // от ног до макушки
+                // Выталкивает игрока из твёрдых объектов (точный круг против повёрнутого прямоугольника), поэтому застрять внутри нельзя
+                function pushOut(pos, fy) {
+                    for (let pass = 0; pass < 3; pass++) {
+                        let moved = false;
+                        for (const c of colliders) {
+                            if (c.rect) {
+                                if (fy >= c.yTop - (c.step ? STEP_UP : (c.stepTol || 0.2))) continue; // это пол под ногами или невысокий уступ — не стена
+                                if (fy + PLAYER_H <= c.yBottom) continue;                              // над головой — не мешает
+                                const dx = pos.x - c.x, dz = pos.z - c.z;
+                                const cs = Math.cos(-c.rot), sn = Math.sin(-c.rot);
+                                let lx = dx * cs - dz * sn, lz = dx * sn + dz * cs;
+                                const pr = c.step ? 0.28 : playerRadius;
+                                const qx = Math.max(-c.halfLen, Math.min(c.halfLen, lx)), qz = Math.max(-c.halfThick, Math.min(c.halfThick, lz));
+                                const ex = lx - qx, ez = lz - qz, d = Math.hypot(ex, ez);
+                                if (d >= pr) continue;
+                                if (d > 1e-5) { lx += ex / d * (pr - d + 0.001); lz += ez / d * (pr - d + 0.001); }
+                                else {
+                                    const penX = c.halfLen + pr - Math.abs(lx), penZ = c.halfThick + pr - Math.abs(lz);
+                                    if (penX < penZ) lx += (lx >= 0 ? 1 : -1) * (penX + 0.001); else lz += (lz >= 0 ? 1 : -1) * (penZ + 0.001);
+                                }
+                                const cr = Math.cos(c.rot), sr = Math.sin(c.rot);
+                                pos.x = c.x + lx * cr - lz * sr; pos.z = c.z + lx * sr + lz * cr; moved = true;
+                            } else {
+                                const dx = pos.x - c.x, dz = pos.z - c.z, d = Math.hypot(dx, dz), need = c.radius + playerRadius;
+                                if (d >= need) continue;
+                                if (c.stoneMesh && fy >= c.topY - 0.35) continue; // стоишь на камне — не выталкивает
+                                if (d > 1e-5) { pos.x = c.x + dx / d * (need + 0.001); pos.z = c.z + dz / d * (need + 0.001); } else pos.x = c.x + need;
+                                moved = true;
+                            }
                         }
-                        if (Math.hypot(px - c.x, pz - c.z) < c.radius + playerRadius) {
-                            // Если игрок уже стоит на вершине камня/фундамента (или почти) - не блокируем, дадим пройти по верху
-                            if ((c.stoneMesh || c.foundation) && feetY >= c.topY - 0.35) continue;
-                            return true;
-                        }
+                        if (!moved) break;
                     }
-                    return false;
                 }
 
                 function withinWorldBounds(px, pz) { return Math.hypot(px, pz) < WATER_BOUNDARY_RADIUS; }
 
-                const nextX = camera.position.x + dir.x * speed * dt;
-                const nextZ = camera.position.z + dir.z * speed * dt;
-                if (!blockedAt(nextX, camera.position.z) && withinWorldBounds(nextX, camera.position.z)) camera.position.x = nextX;
-                if (!blockedAt(camera.position.x, nextZ) && withinWorldBounds(camera.position.x, nextZ)) camera.position.z = nextZ;
+                // Движение маленькими шагами (не дольше 0.25 за раз), чтобы на лагах не пролететь сквозь стену
+                {
+                    const total = speed * dt, steps = Math.max(1, Math.ceil(total / 0.25)), sx = dir.x * total / steps, sz = dir.z * total / steps;
+                    const pos = { x: camera.position.x, z: camera.position.z };
+                    for (let i = 0; i < steps; i++) {
+                        const nx = pos.x + sx, nz = pos.z + sz;
+                        if (withinWorldBounds(nx, nz)) { pos.x = nx; pos.z = nz; }
+                        pushOut(pos, camera.position.y - 2.5);
+                    }
+                    if (!dir.lengthSq()) pushOut(pos, camera.position.y - 2.5); // стоишь на месте, а рядом построили стену — тоже вытолкнет
+                    camera.position.x = pos.x; camera.position.z = pos.z;
+                }
 
                 velY -= 25 * dt;
                 camera.position.y += velY * dt;
 
                 let groundH = getTerrainHeight(camera.position.x, camera.position.z) + 2.5;
                 for (let c of colliders) {
-                    if (c.rect || (!c.stoneMesh && !c.foundation)) continue;
+                    if (c.rect || !c.stoneMesh) continue;
                     const dist = Math.hypot(camera.position.x - c.x, camera.position.z - c.z);
-                    if (dist < c.radius + playerRadius) { // тот же радиус, что и в blockedAt — иначе между ними мёртвая зона, где падаешь, но всё ещё заблокирован
+                    if (dist < c.radius + playerRadius) {
                         const stoneTopH = c.topY + 2.5;
                         if (stoneTopH > groundH && camera.position.y >= stoneTopH - 1.2) groundH = stoneTopH;
                     }
                 }
-                // Лестница: если стоишь над ступенью (и она не выше шага) — встаёшь на неё
+                // Пол: плиты фундамента, крыши и ступени. Берём самую высокую поверхность, на которую можно встать (учитываем, откуда упали за этот кадр)
                 let stairH = null;
                 {
                     const feetNow = camera.position.y - 2.5;
+                    const ft = floorTopAt(camera.position.x, camera.position.z, feetNow - Math.min(0, velY) * dt);
+                    if (ft !== null) stairH = ft + 2.5;
+                }
+                // Потолок: прыжком снизу не пробить крышу или плиту
+                if (velY > 0) {
+                    const feetNow = camera.position.y - 2.5;
                     for (const c of colliders) {
-                        if (!c.step) continue;
+                        if (!c.ceil) continue;
+                        if (feetNow >= c.yBottom - 0.6) continue;
                         const dx = camera.position.x - c.x, dz = camera.position.z - c.z;
-                        const cs2 = Math.cos(-c.rot), sn2 = Math.sin(-c.rot);
-                        const lx = dx * cs2 - dz * sn2, lz = dx * sn2 + dz * cs2;
-                        // стоишь над ступенью — встаёшь на неё; если каким-то образом оказался внутри ступени — тебя поднимает наверх, а не застревает
-                        if (Math.abs(lx) <= c.halfLen && Math.abs(lz) <= c.halfThick && feetNow >= c.yBottom - 0.5) stairH = Math.max(stairH === null ? -Infinity : stairH, c.yTop + 2.5);
-                    }
-                    // Крыша — это поверхность, по которой можно ходить (на неё заходишь с верха лестницы или запрыгиваешь рядом)
-                    for (const r of roofs.values()) {
-                        if (Math.abs(camera.position.x - r.x) <= FOUNDATION_GRID / 2 && Math.abs(camera.position.z - r.z) <= FOUNDATION_GRID / 2) {
-                            const top = r.y + 0.15;
-                            if (feetNow >= top - STEP_UP) stairH = Math.max(stairH === null ? -Infinity : stairH, top + 2.5);
-                        }
+                        if (Math.abs(dx) > c.halfLen + 0.3 || Math.abs(dz) > c.halfThick + 0.3) continue;
+                        if (feetNow + PLAYER_H > c.yBottom) { camera.position.y = c.yBottom - PLAYER_H + 2.5 - 0.01; velY = 0; }
                     }
                 }
-                // Потолок крыши — не даёт пробить её прыжком снизу (на лестнице не мешает подниматься)
-                for (const r of (stairH === null ? roofs.values() : [])) {
-                    const d = Math.hypot(camera.position.x - r.x, camera.position.z - r.z);
-                    if (d < FOUNDATION_GRID * 0.72) {
-                        const ceilY = r.y - 0.15;
-                        if (camera.position.y > ceilY - 0.3 && camera.position.y < ceilY + 0.3) { camera.position.y = ceilY - 0.3; if (velY > 0) velY = 0; }
-                    }
-                }
-                if (stairH !== null && stairH > groundH && camera.position.y < stairH) { // плавно поднимаемся по ступеням
+                if (stairH !== null && stairH > groundH && camera.position.y < stairH) { // плавно поднимаемся на ступень или уступ
                     camera.position.y = Math.min(stairH, camera.position.y + 16 * dt); velY = 0; canJump = true;
                 }
+                if (stairH !== null && stairH > groundH && camera.position.y <= stairH + 0.001) canJump = true;
                 if(camera.position.y < groundH) { camera.position.y = groundH; velY = 0; canJump = true; }
                 const isMoving = keys.w || keys.s || keys.a || keys.d;
                 if (isMoving && canJump) {
