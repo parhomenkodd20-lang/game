@@ -330,7 +330,8 @@
             lock: { id: 'lock', icon: '🔒', name: 'Замок', maxStack: 5, isTool: false },
             door: { id: 'door', icon: '🚪', name: 'Дверь', maxStack: 5, isTool: false },
             cupboard: { id: 'cupboard', icon: '🗄️', name: 'Шкаф', maxStack: 5, isTool: false },
-            furnace: { id: 'furnace', icon: '🏭', name: 'Печь', maxStack: 5, isTool: false }
+            furnace: { id: 'furnace', icon: '🏭', name: 'Печь', maxStack: 5, isTool: false },
+            spear: { id: 'spear', icon: '🔱', name: 'Копьё', maxStack: 1, isTool: true }
         };
 
         const RECIPES = [
@@ -343,6 +344,11 @@
                 id: 'axe', name: 'Топор', icon: '🪓',
                 ingredients: { wood: 10, stone_material: 5 },
                 result: { type: 'axe', count: 1, icon: '🪓', isTool: true }
+            },
+            {
+                id: 'spear', name: 'Копьё', icon: '🔱',
+                ingredients: { wood: 10, stone_material: 10 },
+                result: { type: 'spear', count: 1, icon: '🔱', isTool: true }
             },
             {
                 id: 'mallet', name: 'Киянка', icon: '🔨',
@@ -397,7 +403,9 @@
         const HEAD_MULT = 2;              // множитель урона в голову
         const LOOT_RANGE = 5;             // на каком расстоянии от сумки работает кнопка E
         const BAG_LIFETIME_MS = 5 * 60 * 1000;
-        const DAMAGE = { stone: 5, torch: 3, axe: 7, pickaxe: 9, mallet: 7 };
+        const DAMAGE = { stone: 5, torch: 3, axe: 7, pickaxe: 9, mallet: 7, spear: 25 }; // копьё: 25 по телу, 50 в голову
+        const REACH = { spear: 7 };         // у копья дальность удара больше
+        const meleeRange = (type) => REACH[type] || MELEE_RANGE;
         const playerState = { hp: MAX_HP, lastHurtAt: 0, invulnUntil: 0 };
 
         // Проверка «влезет ли предмет в инвентарь» (настоящий инвентарь не трогает)
@@ -435,6 +443,12 @@
                 armRX: 0.4363, armRY: 0.0698, armRZ: -0.1920,
                 toolX: 0.02, toolY: 0.0, toolZ: -0.18,
                 toolRX: -0.4712, toolRY: 1.6232, toolRZ: 0.4014, toolScale: 1.0
+            },
+            spear: {
+                armX: 0.2700, armY: -0.4000, armZ: -0.5600,
+                armRX: 0.5061, armRY: 0.1920, armRZ: -0.3142,
+                toolX: 0.0000, toolY: 0.0500, toolZ: -0.3000,
+                toolRX: -1.7500, toolRY: 0.0000, toolRZ: 0.0000, toolScale: 0.4200
             },
             torch: {
                 armX: 0.2700, armY: -0.3800, armZ: -0.5400,
@@ -796,6 +810,17 @@
         torchGroup.add(torchLight);
         rightArm.add(torchGroup);
 
+        // --- КОПЬЁ (модель из студии) ---
+        function buildSpearMesh() {
+            const g = new THREE.Group();
+            const solid = (c) => new THREE.MeshLambertMaterial({ color: c, flatShading: true });
+            let m = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 2.5, 9), solid(0x8a5a2b)); m.position.set(0, 0.5, -0.1); m.castShadow = true; g.add(m);
+            m = new THREE.Mesh(new THREE.ConeGeometry(0.11, 0.6, 8), solid(0x7d7d82)); m.position.set(0, 2, -0.1); m.castShadow = true; g.add(m);
+            return g;
+        }
+        const spearGroup = buildSpearMesh();
+        rightArm.add(spearGroup);
+
         // Применяем начальные координаты
         pickaxeGroup.scale.setScalar(devSettings.pickaxe.toolScale);
         pickaxeGroup.position.set(devSettings.pickaxe.toolX, devSettings.pickaxe.toolY, devSettings.pickaxe.toolZ);
@@ -815,6 +840,10 @@
         axeGroup.visible = false;
         malletGroup.visible = false;
         torchGroup.visible = false;
+        spearGroup.scale.setScalar(devSettings.spear.toolScale);
+        spearGroup.position.set(devSettings.spear.toolX, devSettings.spear.toolY, devSettings.spear.toolZ);
+        spearGroup.rotation.set(devSettings.spear.toolRX, devSettings.spear.toolRY, devSettings.spear.toolRZ);
+        spearGroup.visible = false;
 
         // --- ГЕНЕРАЦИЯ МИРА ---
         const craterPos = { x: 80, z: -80 };
@@ -1719,24 +1748,25 @@
         function buildBearMesh() { // модель из студии
             const root = new THREE.Group(), pivot = new THREE.Group(), g = new THREE.Group();
             const legs = [], parts = [];
-            const box = (w, h, d, x, y, z, c, leg) => {
+            const box = (w, h, d, x, y, z, c, leg, head) => {
                 const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), new THREE.MeshLambertMaterial({ color: c, flatShading: true }));
                 m.position.set(x, y, z); m.castShadow = true; g.add(m); parts.push(m);
+                if (head) m.userData.head = true; // попадание сюда — удар в голову
                 if (leg) legs.push({ m, z0: z });
             };
             const B = 0x5a3a1c, D = 0x1c1c1e;
             box(0.8, 0.7, 1.4, 0, 1, 0, B);
-            box(0.7, 0.6, 0.6, 0, 1.3, 0.6, B);
-            box(0.3, 0.2, 0.3, 0, 1.25, 0.8, D);
-            box(0.1, 0.1, 0.3, 0.2, 1.45, 0.8, D);
-            box(0.1, 0.1, 0.3, -0.2, 1.45, 0.8, D);
+            box(0.7, 0.6, 0.6, 0, 1.3, 0.6, B, false, true);
+            box(0.3, 0.2, 0.3, 0, 1.25, 0.8, D, false, true);
+            box(0.1, 0.1, 0.3, 0.2, 1.45, 0.8, D, false, true);
+            box(0.1, 0.1, 0.3, -0.2, 1.45, 0.8, D, false, true);
             box(0.3, 0.4, 0.4, 0.25, 0.6, 0.5, B, true);
             box(0.3, 0.4, 0.4, -0.25, 0.6, 0.5, B, true);
             box(0.3, 0.4, 0.4, -0.25, 0.6, -0.5, B, true);
             box(0.3, 0.4, 0.4, 0.25, 0.6, -0.5, B, true);
             box(0.3, 0.3, 0.3, -0.05, 1.3, -0.7, B);
-            box(0.2, 0.5, 0.1, 0.21, 1.5, 0.7, B);
-            box(0.2, 0.5, 0.1, -0.21, 1.5, 0.7, B);
+            box(0.2, 0.5, 0.1, 0.21, 1.5, 0.7, B, false, true);
+            box(0.2, 0.5, 0.1, -0.21, 1.5, 0.7, B, false, true);
             g.position.y = -0.4; // лапы модели начинаются на 0.4 выше нуля — опускаем, чтобы стоял на земле
             pivot.add(g); root.add(pivot);
             return { root, pivot, legs, parts };
@@ -1895,7 +1925,8 @@
                     const reachable = Math.abs(t2.gy - getTerrainHeight(b.x, b.z)) < 1.8; // игрок на фундаменте/крыше — не достать
                     if (b.chaseBest === undefined) { b.chaseBest = Infinity; b.stuckT = 0; }
                     if (reachable && d < b.chaseBest - 0.5) { b.chaseBest = d; b.stuckT = 0; }  // приближается — всё хорошо
-                    else if (!reachable || (d > BEAR_REACH && d < BEAR_REACH + 8)) b.stuckT += dt;                        // не достаёт или упёрся в стену — копим терпение
+                    else if (!reachable) b.stuckT += dt;   // терпение тратится только пока игрок на фундаменте/крыше, куда не залезть
+                    if (reachable && d <= BEAR_REACH + 3) b.stuckT = 0;                        // не достаёт или упёрся в стену — копим терпение
                     if (b.stuckT >= BEAR_GIVEUP_S) { // сдался: ставит точку подальше, потом поведение выберется случайно
                         b.aggro = false; b.ignorePid = b.target; b.ignoreUntil = now + 10000; b.target = null; b.windup = 0; b.stuckT = 0; b.chaseBest = Infinity;
                         const g = bearPickGoal(b, 15, 30); if (g) { b.goal = g; b.speed = BEAR_WALK; b.goalT = 25; }
@@ -1971,11 +2002,11 @@
             if (!bears.size || !DAMAGE[item.type]) return false;
             const roots = []; bears.forEach(b => roots.push(b.mesh.root));
             const ph = raycaster.intersectObjects(roots, true)[0];
-            if (!ph || ph.distance > MELEE_RANGE + 1 || ph.distance > blockDist) return false;
+            if (!ph || ph.distance > meleeRange(item.type) + 1 || ph.distance > blockDist) return false;
             let o = ph.object; while (o && !o.userData.bearId) o = o.parent;
             if (!o) return false;
             spawnBlood(ph.point.x, ph.point.y, ph.point.z, 11);
-            netSend({ t: 'bearhit', id: o.userData.bearId });
+            netSend({ t: 'bearhit', id: o.userData.bearId, head: !!ph.object.userData.head });
             flashHitMarker(false);
             return true;
         }
@@ -3122,6 +3153,11 @@
                 armR: { pos: [0.7200, 1.8400, 0.0000], rot: [-1.3090, -0.0175, -0.0960] },
                 armL: { pos: [-0.7200, 1.9500, 0.0000], rot: [0.0500, 0.0000, -0.0600] }
             },
+            spear: {
+                pos: [0.0000, 0.2500, 0.1000], rot: [1.5272, 0.0000, 0.1000], scale: 0.9000,
+                armR: { pos: [0.7200, 1.8400, 0.0000], rot: [-1.3090, -0.0175, -0.0960] },
+                armL: { pos: [-0.7200, 1.9500, 0.0000], rot: [0.0500, 0.0000, -0.0600] }
+            },
             chertyozh: {
                 pos: [-0.3300, -0.0300, -0.0400], rot: [0.3500, 0.2500, 0.1000], scale: 1.2000,
                 armR: { pos: [0.7200, 1.9500, 0.0000], rot: [-1.0908, 0.0175, -0.4276] },
@@ -3138,6 +3174,7 @@
             else if (type === 'axe') src = axeGroup;
             else if (type === 'mallet') src = malletGroup;
             else if (type === 'torch') src = torchGroup;
+            else if (type === 'spear') src = spearGroup;
             else if (type === 'chertyozh') src = blueprintGroup;
             if (!src) return null;
 
@@ -3298,6 +3335,11 @@
             }
             // Знак зависит от того, в какую сторону повёрнута рука в хвате: если поза с отрицательным X
             // (рука вытянута вперёд), замах идёт в минус, иначе удар получился бы снизу вверх.
+            let spearThrust = 0;
+            if (ud.heldType === 'spear') { // копьё: рука выпрямляется вперёд, а не бьёт сверху вниз
+                if (attacking) { const ap = attackTime / attackDuration; spearThrust = ap < 0.2 ? ap / 0.2 : (ap < 0.4 ? 1 : Math.max(0, 1 - (ap - 0.4) / 0.6)); }
+                swing = 0;
+            }
             const sgnR = toR < 0 ? -1 : 1;
             const sgnL = toL < 0 ? -1 : 1;
 
@@ -3312,6 +3354,7 @@
                 ud.armR.pivot.rotation.z = ARM_REST_ROT.z;
             }
             ud.armR.pivot.rotation.x = restRotX + swing * sgnR;
+            if (spearThrust > 0) ud.armR.pivot.position.z += spearThrust * 1.1;
 
             // Левая рука (камень держим двумя руками — левая повторяет удар правой)
             if (cfg) {
@@ -3357,7 +3400,7 @@
         const SEND_INTERVAL_MS = 50;   // как часто шлём своё состояние
         const HOST_TICK_MS = 50;       // как часто хозяин рассылает позиции
         const PEER_TIMEOUT_MS = 20000; // столько молчания = игрок отвалился
-        const HELD_ITEMS = ['stone', 'pickaxe', 'axe', 'mallet', 'torch', 'chertyozh'];
+        const HELD_ITEMS = ['stone', 'pickaxe', 'axe', 'mallet', 'torch', 'chertyozh', 'spear'];
         const RESOURCE_ID = /^(tree|rock)_[rc]?\d{1,6}$/; // обычные (tree_5), возродившиеся (rock_r7) и кратерные (rock_c0)
         // ===== Свой игровой сервер (WebSocket). Впиши адрес сюда после запуска на Render, например 'my-game.onrender.com'.
         // Можно и без правки файла: game.html?server=my-game.onrender.com  Пусто = старый режим через PeerJS.
@@ -3603,7 +3646,7 @@
             const models = []; remotePlayers.forEach(rp => { if (!rp.dead) models.push(rp.model); }); // погибших (уже невидимых) не бьём
             if (!models.length) return false;
             const ph = raycaster.intersectObjects(models, true)[0];
-            if (!ph || ph.distance > MELEE_RANGE || ph.distance > blockDist) return false;
+            if (!ph || ph.distance > meleeRange(item.type) || ph.distance > blockDist) return false;
             let o = ph.object;
             while (o && !o.userData.playerId) o = o.parent;
             if (!o) return false;
@@ -4053,7 +4096,7 @@
                     const base = DAMAGE[p.state.item];
                     if (!base) return;
                     const a = p.state, b = v.state;
-                    if (Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z) > MELEE_RANGE + 3) return;
+                    if (Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z) > meleeRange(a.item) + 3) return;
                     const head = !!m.head;
                     const dmg = base * (head ? HEAD_MULT : 1);
                     let killed = false;
@@ -4225,8 +4268,8 @@
                     const nowB = performance.now();
                     if (nowB - (p.lastBearHit || 0) < 250) return; p.lastBearHit = nowB;
                     const base = DAMAGE[p.state.item];
-                    if (!base || Math.hypot(p.state.x - b.x, p.state.z - b.z) > MELEE_RANGE + 4.5) return;
-                    b.hp -= base;
+                    if (!base || Math.hypot(p.state.x - b.x, p.state.z - b.z) > meleeRange(p.state.item) + 4.5) return;
+                    b.hp -= base * (m.head ? HEAD_MULT : 1);
                     if (b.hp <= 0) { hostAll({ t: 'bearkill', id: b.id }); bearSpawnAt.push(Date.now() + BEAR_RESPAWN_S * 1000); }
                     else { hostAll({ t: 'bearhurt', id: b.id, hp: b.hp }); if (!b.aggro) { b.aggro = true; b.target = fromId; b.goal = null; b.stuckT = 0; b.chaseBest = Infinity; } } // ударили — сразу разозлился на того, кто бьёт
                     break;
@@ -4715,7 +4758,7 @@
                     rightArm.position.set(0.35, -0.4, -0.45); rightArm.rotation.set(1.1, 0.7, -0.3);
                     stoneMesh.visible = (currentItem.type === 'stone');
                     blueprintGroup.visible = (currentItem.type === 'chertyozh');
-                    pickaxeGroup.visible = false; axeGroup.visible = false; malletGroup.visible = false; torchGroup.visible = false;
+                    pickaxeGroup.visible = false; axeGroup.visible = false; malletGroup.visible = false; torchGroup.visible = false; spearGroup.visible = false;
                 } else {
                     leftArm.visible = false; rightArm.visible = true;
                     const s = devSettings[currentItem.type];
@@ -4726,6 +4769,7 @@
                     axeGroup.visible = (currentItem.type === 'axe');
                     malletGroup.visible = (currentItem.type === 'mallet');
                     torchGroup.visible = (currentItem.type === 'torch');
+                    spearGroup.visible = (currentItem.type === 'spear');
                     if (currentItem.type === 'pickaxe') {
                         pickaxeGroup.position.set(s.toolX, s.toolY, s.toolZ);
                         pickaxeGroup.rotation.set(s.toolRX, s.toolRY, s.toolRZ);
@@ -4742,11 +4786,15 @@
                         torchGroup.position.set(s.toolX, s.toolY, s.toolZ);
                         torchGroup.rotation.set(s.toolRX, s.toolRY, s.toolRZ);
                         torchGroup.scale.setScalar(s.toolScale);
+                    } else if (currentItem.type === 'spear') {
+                        spearGroup.position.set(s.toolX, s.toolY, s.toolZ);
+                        spearGroup.rotation.set(s.toolRX, s.toolRY, s.toolRZ);
+                        spearGroup.scale.setScalar(s.toolScale);
                     }
                 }
             } else {
                 viewModel.visible = false; leftArm.visible = false; rightArm.visible = false;
-                stoneMesh.visible = false; blueprintGroup.visible = false; pickaxeGroup.visible = false; axeGroup.visible = false; malletGroup.visible = false; torchGroup.visible = false;
+                stoneMesh.visible = false; blueprintGroup.visible = false; pickaxeGroup.visible = false; axeGroup.visible = false; malletGroup.visible = false; torchGroup.visible = false; spearGroup.visible = false;
             }
             updateBuildGhost(currentItem, dt);
 
@@ -4857,11 +4905,17 @@
             if (gameState.isAttacking) {
                 gameState.attackTime += dt;
                 const p = gameState.attackTime / gameState.attackDuration;
-                if (p < 0.45) viewModel.rotation.x = (p / 0.45) * 0.7;
-                else if (p < 0.65) viewModel.rotation.x = 0.7 - ((p - 0.45) / 0.2) * 1.5;
-                else if (p < 1.0) viewModel.rotation.x = -0.8 + ((p - 0.65) / 0.35) * 0.8;
-                else { gameState.isAttacking = false; viewModel.rotation.x = 0; }
-            }
+                if (localHeld === 'spear') { // копьё: быстрый выпад вперёд и назад, без замаха сверху
+                    const th = p < 0.2 ? p / 0.2 : (p < 0.4 ? 1 : Math.max(0, 1 - (p - 0.4) / 0.6));
+                    viewModel.position.z = -1.0 * th; viewModel.position.y -= 0.05 * th; viewModel.rotation.x = 0;
+                    if (p >= 1.0) { gameState.isAttacking = false; viewModel.position.z = 0; }
+                } else {
+                    if (p < 0.45) viewModel.rotation.x = (p / 0.45) * 0.7;
+                    else if (p < 0.65) viewModel.rotation.x = 0.7 - ((p - 0.45) / 0.2) * 1.5;
+                    else if (p < 1.0) viewModel.rotation.x = -0.8 + ((p - 0.65) / 0.35) * 0.8;
+                    else { gameState.isAttacking = false; viewModel.rotation.x = 0; }
+                }
+            } else if (viewModel.position.z !== 0) viewModel.position.z = 0;
             renderer.render(scene, camera);
         }
 
