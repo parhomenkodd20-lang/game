@@ -1702,16 +1702,17 @@
         // ---------- медведи: бродят по острову, замечают игрока, бегут за ним и бьют (логика считается у хозяина мира) ----------
         const BEAR_MAX = 5;                 // сколько медведей одновременно в мире
         const BEAR_HP = 200, BEAR_DMG = 30; // здоровье и урон за удар
-        const BEAR_ATK_CD = 4;              // секунд между ударами
-        const BEAR_WINDUP = 0.5;            // замах перед ударом
-        const BEAR_SCALE = 2;               // размер модели в мире (модель из студии маленькая)
+        const BEAR_ATK_CD = 2;              // секунд между ударами
+        const BEAR_WINDUP = 0.25;           // замах перед ударом (короткий — бьёт сразу, как достал)
+        const BEAR_SCALE = 1.6;             // размер модели в мире (модель из студии маленькая)
         const BEAR_AGGRO_MULT = 1.25;       // во сколько раз он вырастает, когда заметил игрока
         const BEAR_WALK = 2.4, BEAR_RUN = 8; // скорость прогулки и погони
         const BEAR_VIEW = 32, BEAR_FOV_COS = Math.cos(Math.PI * 0.42); // дальность и половина угла обзора (~75°)
         const BEAR_SENSE = 8;               // вплотную замечает и сзади
         const BEAR_INTEREST = 55;           // пока игрок в этом круге — бежит за ним
-        const BEAR_REACH = 3.6;             // дальность удара (от центра медведя)
-        const BEAR_RADIUS = 1.3;            // «толщина» медведя для столкновений
+        const BEAR_REACH = 3.0;             // дальность удара (от центра медведя)
+        const BEAR_RADIUS = 1.1;            // «толщина» медведя для столкновений
+        const BEAR_GIVEUP_S = 5;             // сколько пытается достать недосягаемого игрока (на фундаменте, за стеной), потом уходит
         const BEAR_RESPAWN_S = 12;          // через сколько секунд после гибели появится новый
         const bears = new Map();            // id -> запись медведя (и у хозяина, и у остальных)
         let bearSpawnAt = [], bearSeq = 0, bearLast = Date.now();
@@ -1875,11 +1876,12 @@
                     const fx = Math.sin(b.rot), fz = Math.cos(b.rot);
                     let best = null, bd = Infinity;
                     pls.forEach(p => {
+                        if (p.pid === b.ignorePid && now < (b.ignoreUntil || 0)) return; // только что бросил погоню за этим игроком
                         const dx = p.x - b.x, dz = p.z - b.z, d = Math.hypot(dx, dz);
                         if (d > BEAR_VIEW || Math.abs(p.gy - getTerrainHeight(b.x, b.z)) > 12) return;
                         if (d <= BEAR_SENSE || (dx * fx + dz * fz) / (d || 1) >= BEAR_FOV_COS) { if (d < bd) { bd = d; best = p; } }
                     });
-                    if (best) { b.aggro = true; b.target = best.pid; b.goal = null; }
+                    if (best) { b.aggro = true; b.target = best.pid; b.goal = null; b.stuckT = 0; b.chaseBest = Infinity; }
                 }
                 if (b.aggro) {
                     const tp = pls.find(p => p.pid === b.target);
@@ -1890,15 +1892,25 @@
                     const t2 = pls.find(p => p.pid === b.target);
                     const dx = t2.x - b.x, dz = t2.z - b.z, d = Math.hypot(dx, dz);
                     const want = Math.atan2(dx, dz);
+                    const reachable = Math.abs(t2.gy - getTerrainHeight(b.x, b.z)) < 1.8; // игрок на фундаменте/крыше — не достать
+                    if (b.chaseBest === undefined) { b.chaseBest = Infinity; b.stuckT = 0; }
+                    if (reachable && d < b.chaseBest - 0.5) { b.chaseBest = d; b.stuckT = 0; }  // приближается — всё хорошо
+                    else if (!reachable || (d > BEAR_REACH && d < BEAR_REACH + 8)) b.stuckT += dt;                        // не достаёт или упёрся в стену — копим терпение
+                    if (b.stuckT >= BEAR_GIVEUP_S) { // сдался: ставит точку подальше, потом поведение выберется случайно
+                        b.aggro = false; b.ignorePid = b.target; b.ignoreUntil = now + 10000; b.target = null; b.windup = 0; b.stuckT = 0; b.chaseBest = Infinity;
+                        const g = bearPickGoal(b, 15, 30); if (g) { b.goal = g; b.speed = BEAR_WALK; b.goalT = 25; }
+                        b.idleT = 2 + Math.random() * 4;
+                        return;
+                    }
                     if (b.windup > 0) { // замахнулся — бьёт
                         b.windup -= dt; b.rot += Math.max(-8 * dt, Math.min(8 * dt, angDiff(want, b.rot)));
                         if (b.windup <= 0) {
-                            if (d <= BEAR_REACH + 1.2 && Math.abs(t2.gy - getTerrainHeight(b.x, b.z)) < 4) hostHurtPlayer(t2.pid, BEAR_DMG);
-                            b.atkCd = BEAR_ATK_CD - BEAR_WINDUP; // удар раз в 4 секунды считая замах
+                            if (d <= BEAR_REACH + 1.2 && reachable) hostHurtPlayer(t2.pid, BEAR_DMG);
+                            b.atkCd = BEAR_ATK_CD - BEAR_WINDUP; // удар раз в 2 секунды считая замах
                         }
                     } else if (d <= BEAR_REACH) {
                         b.rot += Math.max(-8 * dt, Math.min(8 * dt, angDiff(want, b.rot)));
-                        if (b.atkCd <= 0 && Math.abs(angDiff(want, b.rot)) < 0.6) b.windup = BEAR_WINDUP;
+                        if (b.atkCd <= 0 && reachable && Math.abs(angDiff(want, b.rot)) < 1.1) b.windup = BEAR_WINDUP; // достал — бьёт сразу, дальше перезарядка
                     } else bearWalkTo(b, t2.x, t2.z, BEAR_RUN, dt);
                     return;
                 }
@@ -1910,7 +1922,7 @@
                     return;
                 }
                 b.idleT -= dt; b.stepT -= dt;
-                if (b.stepT <= 0) { b.stepT = 3; const g = bearPickGoal(b, 1, 2.2); if (g) { b.goal = g; b.speed = BEAR_WALK * 0.6; b.goalT = 3; return; } }
+                if (b.stepT <= 0) { b.stepT = 3; const g = bearPickGoal(b, 3, 6); if (g) { b.goal = g; b.speed = BEAR_WALK * 0.8; b.goalT = 5; return; } }
                 if (b.idleT <= 0) {
                     if (Math.random() < 0.55) { const g = bearPickGoal(b, 8, 25); if (g) { b.goal = g; b.speed = BEAR_WALK; b.goalT = 25; return; } }
                     b.idleT = 3 + Math.random() * 6;
@@ -4216,7 +4228,7 @@
                     if (!base || Math.hypot(p.state.x - b.x, p.state.z - b.z) > MELEE_RANGE + 4.5) return;
                     b.hp -= base;
                     if (b.hp <= 0) { hostAll({ t: 'bearkill', id: b.id }); bearSpawnAt.push(Date.now() + BEAR_RESPAWN_S * 1000); }
-                    else { hostAll({ t: 'bearhurt', id: b.id, hp: b.hp }); if (!b.aggro) { b.aggro = true; b.target = fromId; b.goal = null; } } // ударили — сразу разозлился на того, кто бьёт
+                    else { hostAll({ t: 'bearhurt', id: b.id, hp: b.hp }); if (!b.aggro) { b.aggro = true; b.target = fromId; b.goal = null; b.stuckT = 0; b.chaseBest = Infinity; } } // ударили — сразу разозлился на того, кто бьёт
                     break;
                 }
                 case 'ping': if (typeof m.ts === 'number') sendTo(fromId, { t: 'pong', ts: m.ts }); break; // отвечаем, чтобы клиент мог измерить пинг
