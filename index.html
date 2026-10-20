@@ -619,7 +619,7 @@
         scene.background = new THREE.Color(0x87CEEB);
         scene.fog = new THREE.FogExp2(0x87CEEB, 0.0028);
 
-        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.2, 1000); // ближняя плоскость 0.2 — точнее буфер глубины вдали
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.shadowMap.enabled = true;
@@ -1078,7 +1078,7 @@
             const c = cv.getContext('2d');
             c.fillStyle = '#9a9a9a'; c.fillRect(0, 0, 512, 256); // ровная серая стена, как была
             c.fillStyle = '#111111';
-            const lw = 15;
+            const lw = 22;
             [0, 128].forEach(y => { c.fillRect(0, y - lw / 2, 512, lw); if (y === 0) c.fillRect(0, 256 - lw / 2, 512, lw); }); // линии между рядами
             const vline = (x, y0, y1) => { c.fillRect(x - lw / 2, y0, lw, y1 - y0); if (x - lw / 2 < 0) c.fillRect(x - lw / 2 + 512, y0, lw, y1 - y0); if (x + lw / 2 > 512) c.fillRect(x - lw / 2 - 512, y0, lw, y1 - y0); };
             [0, 256].forEach(x => vline(x, 0, 128));      // стыки верхнего ряда
@@ -1129,13 +1129,14 @@
 
         function buildWallMesh(rot, variant, mat) {
             const g = new THREE.Group();
-            const add = (w, h, x, y) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, WALL_THICK), mat); m.position.set(x, y, 0); m.castShadow = true; g.add(m); };
+            const CUT = WALL_SINK + 0.34; // верх плиты в координатах стены: ниже стену не рисуем, иначе она просвечивает сквозь плиту вдали
+            const add = (w, h, x, y) => { if (y - h / 2 < CUT) { const top = y + h / 2; h = top - CUT; y = CUT + h / 2; } const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, WALL_THICK), mat); m.position.set(x, y, 0); m.castShadow = true; g.add(m); };
             if (variant === 'door') {
                 const postW = (WALL_LEN - DOOR_WIDTH) / 2;
                 add(postW, WALL_HEIGHT, -(WALL_LEN / 2 - postW / 2), WALL_HEIGHT / 2);
                 add(postW, WALL_HEIGHT, (WALL_LEN / 2 - postW / 2), WALL_HEIGHT / 2);
                 const lintelH = Math.max(0.2, WALL_HEIGHT - DOOR_HEIGHT);
-                add(WALL_LEN, lintelH, 0, DOOR_HEIGHT + lintelH / 2);
+                add(DOOR_WIDTH, lintelH, 0, DOOR_HEIGHT + lintelH / 2); // перемычка только между стойками, без наложения граней
             } else if (variant === 'window') {
                 // Прямоугольное окно, вытянутое по горизонтали, просто проём без решёток
                 const postW = (WALL_LEN - WINDOW_WIDTH) / 2;
@@ -1900,10 +1901,34 @@
         }
 
         // Хозяин комнаты: расход запаса в шкафу и гниение частей без защиты
-        let upkeepLast = performance.now(), tcBroadcastAcc = 0, decayAcc = 0;
+        let upkeepLast = Date.now(), tcBroadcastAcc = 0, decayAcc = 0;
+        // Мир «спал» (сервер/хозяин были выключены): догоняем расход запаса в шкафах и гниение за прошедшее время
+        function worldCatchUp(elapsed) {
+            if (!(elapsed > 60)) return;
+            elapsed = Math.min(elapsed, 30 * DAY_S);
+            const stats = new Map(); cupboards.forEach(t => stats.set(t, { wood: 0, stone: 0 }));
+            allParts((k, r) => { const t = nearestTc(r.x, r.z); if (t) { const st = stats.get(t); if (r.material === 'stone') st.stone++; else st.wood++; } });
+            const prot = new Map();
+            stats.forEach((st, t) => {
+                const rw = st.wood * UPKEEP_PER_PART / DAY_S, rs = st.stone * UPKEEP_PER_PART / DAY_S;
+                prot.set(t, { w: rw > 0 ? Math.min(elapsed, t.wood / rw) : (t.wood > 0 ? elapsed : 0), s: rs > 0 ? Math.min(elapsed, t.stone / rs) : (t.stone > 0 ? elapsed : 0) });
+                t.wood = Math.max(0, t.wood - rw * elapsed); t.stone = Math.max(0, t.stone - rs * elapsed);
+            });
+            const dead = [];
+            allParts((k, r) => {
+                const t = nearestTc(r.x, r.z);
+                const unprotected = t ? elapsed - (r.material === 'stone' ? prot.get(t).s : prot.get(t).w) : elapsed;
+                const steps = Math.floor(unprotected / DECAY_INTERVAL_S);
+                if (steps < 1) return;
+                const hp = (typeof r.hp === 'number' ? r.hp : (r.material === 'stone' ? 400 : 200)) - steps * DECAY_HP;
+                if (hp <= 0) dead.push([k, r.id]); else r.hp = hp;
+            });
+            dead.forEach(([k, id]) => hostAll({ t: 'piecedel', kind: k, id }));
+            cupboards.forEach(t => hostAll({ t: 'tcstock', id: t.id, wood: t.wood, stone: t.stone }));
+        }
         function hostUpkeepTick() {
-            const now = performance.now();
-            const dt = Math.min(5, (now - upkeepLast) / 1000); upkeepLast = now;
+            const now = Date.now();
+            const dt = Math.min(3600, Math.max(0, (now - upkeepLast) / 1000)); upkeepLast = now; // реальное время (даже если вкладка тормозила)
             if (role !== 'host') return;
             const stats = new Map(); cupboards.forEach(t => stats.set(t, { wood: 0, stone: 0 }));
             allParts((k, r) => { const t = nearestTc(r.x, r.z); if (t) { const st = stats.get(t); if (r.material === 'stone') st.stone++; else st.wood++; } });
@@ -1915,13 +1940,13 @@
             if (tcBroadcastAcc >= 10) { tcBroadcastAcc = 0; cupboards.forEach(t => hostAll({ t: 'tcstock', id: t.id, wood: t.wood, stone: t.stone })); }
             decayAcc += dt;
             if (decayAcc >= DECAY_INTERVAL_S) {
-                decayAcc = 0;
+                const decaySteps = Math.floor(decayAcc / DECAY_INTERVAL_S); decayAcc -= decaySteps * DECAY_INTERVAL_S;
                 const changes = [], dead = [];
                 allParts((k, r) => {
                     const t = nearestTc(r.x, r.z);
                     const protectedNow = t && (r.material === 'stone' ? t.stone > 0 : t.wood > 0);
                     if (protectedNow) return;
-                    r.hp = (typeof r.hp === 'number' ? r.hp : (r.material === 'stone' ? 400 : 200)) - DECAY_HP;
+                    r.hp = (typeof r.hp === 'number' ? r.hp : (r.material === 'stone' ? 400 : 200)) - DECAY_HP * decaySteps;
                     if (r.hp <= 0) dead.push([k, r.id]); else changes.push([k, r.id, r.hp]);
                 });
                 if (changes.length) hostAll({ t: 'decay', parts: changes });
@@ -3950,28 +3975,30 @@
             };
         }
         // Хозяин раз в 10 секунд отдаёт серверу сохранение мира (только если что-то изменилось)
-        let saveTicker = null, lastSavedJson = '';
+        let saveTicker = null, lastSavedJson = '', lastSaveSentAt = 0;
         function saveWorldNow(p) {
             if (!p || !p.isWS || role !== 'host') return;
             const data = worldPayload(); delete data.cycle;
             const json = JSON.stringify(data);
-            if (json === lastSavedJson) return;
-            lastSavedJson = json; p.sendRaw({ k: 'save', data });
+            const nowMs = Date.now();
+            if (json === lastSavedJson && nowMs - lastSaveSentAt < 60000) return; // без изменений — всё равно раз в минуту «отмечаемся», чтобы знать, до какого момента мир жил
+            lastSavedJson = json; lastSaveSentAt = nowMs; data.savedAt = nowMs; p.sendRaw({ k: 'save', data });
         }
 
         // Запасная копия мира в самом браузере: любой игрок раз в 10 секунд запоминает, как выглядит мир (постройки, срубленное).
         // Если бесплатный сервер перезапустился и «забыл» мир, первый вернувшийся игрок восстанавливает его из своей копии.
         const worldCacheKey = () => 'nw_cache_' + GAME_SERVER + '_' + worldId;
-        let lastCachedJson = '';
+        let lastCachedJson = '', lastCacheAt = 0;
         function cacheWorldLocally() {
             if (!USE_WS || !role || soloMode) return;
             const data = worldPayload(); delete data.cycle;
             const empty = !data.destroyed.length && !data.foundations.length && !data.walls.length && !data.roofs.length && !data.doors.length && !data.cupboards.length && !data.furnaces.length && !data.stairs.length && !data.bags.length;
             if (empty) return; // пустой мир копией не затираем
             const json = JSON.stringify(data);
-            if (json === lastCachedJson) return;
-            lastCachedJson = json;
-            try { localStorage.setItem(worldCacheKey(), json); } catch (_) {}
+            const nowMs = Date.now();
+            if (json === lastCachedJson && nowMs - lastCacheAt < 60000) return;
+            lastCachedJson = json; lastCacheAt = nowMs; data.savedAt = nowMs;
+            try { localStorage.setItem(worldCacheKey(), JSON.stringify(data)); } catch (_) {}
         }
         function readLocalWorldCache() {
             try { const t = localStorage.getItem(worldCacheKey()); return t ? JSON.parse(t) : null; } catch (_) { return null; }
@@ -4005,7 +4032,7 @@
             if (p.isWS) {
                 p.on('snap', handleNetMessage); // позиции игроков приходят от сервера
                 const restore = p.savedWorld || readLocalWorldCache(); // сначала сохранение с сервера, а если сервер «забыл» мир — копия из этого браузера
-                if (restore) handleNetMessage({ t: 'welcome', id, players: [], ...restore }); // мир с прошлого раза: постройки, срубленные деревья…
+                if (restore) { handleNetMessage({ t: 'welcome', id, players: [], ...restore }); if (typeof restore.savedAt === 'number') worldCatchUp((Date.now() - restore.savedAt) / 1000); } // мир с прошлого раза: постройки, срубленные деревья… и пока он спал, всё гнило
                 lastSavedJson = '';
                 saveTicker = makeTicker(() => saveWorldNow(p), 10000);
             }
