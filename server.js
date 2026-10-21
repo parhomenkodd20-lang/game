@@ -26,6 +26,8 @@ const MAX_FRAME = 4 * 1024 * 1024; // самое большое сообщени
 const MAX_PLAYER_MSG = 32 * 1024;  // обычный игрок не может слать больше
 const MAX_SAVE_BYTES = 3 * 1024 * 1024;
 const SAVE_DELAY_MS = 5000;
+const PLAYER_KEEP_MS = 30 * 24 * 3600 * 1000; // данные игрока, который не заходил 30 дней, стираем
+const MAX_PLAYER_RECORDS = 3000;
 const HELD_ITEMS = ['stone', 'pickaxe', 'axe', 'mallet', 'torch', 'chertyozh', 'spear'];
 
 const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
@@ -64,7 +66,7 @@ const store = {
 // Миры
 // ---------------------------------------------------------------------
 const worlds = new Map(); // id -> { id, name, host, players: Map(id -> Conn), saved, saveTimer, dirty }
-WORLD_NAMES.forEach((name, i) => worlds.set('w' + (i + 1), { id: 'w' + (i + 1), name, host: null, players: new Map(), saved: null, saveTimer: null, dirty: false }));
+WORLD_NAMES.forEach((name, i) => worlds.set('w' + (i + 1), { id: 'w' + (i + 1), name, host: null, players: new Map(), saved: null, saveTimer: null, dirty: false, pdata: {}, pTimer: null, pDirty: false }));
 
 function schedulePersist(w) {
     w.dirty = true;
@@ -72,9 +74,27 @@ function schedulePersist(w) {
     w.saveTimer = setTimeout(() => { w.saveTimer = null; persistNow(w); }, SAVE_DELAY_MS);
 }
 async function persistNow(w) {
-    if (!w.dirty || !w.saved) return;
-    w.dirty = false;
-    await store.save(w.id, w.saved);
+    if (w.dirty && w.saved) { w.dirty = false; await store.save(w.id, w.saved); }
+    await persistPlayers(w);
+}
+// Данные игроков (инвентарь и место, где вышел) лежат отдельно от мира: id игрока -> запись. Хозяин мира их не трогает.
+function schedulePersistPlayers(w) {
+    w.pDirty = true;
+    if (w.pTimer) return;
+    w.pTimer = setTimeout(() => { w.pTimer = null; persistPlayers(w); }, SAVE_DELAY_MS);
+}
+async function persistPlayers(w) {
+    if (!w.pDirty) return;
+    w.pDirty = false;
+    await store.save(w.id + '_p', { v: 1, players: w.pdata });
+}
+// Проверка записи от игрока: только числа и простые названия предметов, ничего лишнего
+const ITEM_TYPE = /^[a-z0-9_]{1,32}$/;
+function cleanPlayerRec(m, nick) {
+    if (!Array.isArray(m.inv) || m.inv.length > 40) return null;
+    const inv = m.inv.map(it => (it && typeof it.type === 'string' && ITEM_TYPE.test(it.type) && Number.isInteger(it.count) && it.count >= 1 && it.count <= 999) ? { type: it.type, count: it.count } : null);
+    if (!isNum(m.x, 2000) || !isNum(m.y, 500) || !isNum(m.z, 2000) || !isNum(m.yaw, 10) || !isNum(m.pitch, 10)) return null;
+    return { inv, sel: Number.isInteger(m.sel) && m.sel >= 0 && m.sel < 40 ? m.sel : 0, dead: !!m.dead, x: m.x, y: m.y, z: m.z, yaw: m.yaw, pitch: m.pitch, nick: nick || '', at: Date.now() };
 }
 
 // ---------------------------------------------------------------------
@@ -172,6 +192,12 @@ function leaveWorld(c) {
     const w = c.world; if (!w || !c.id) return;
     const wasAttached = c.attached, wasHost = c.isHost;
     w.players.delete(c.id);
+    const prec = w.pdata[c.id]; // запоминаем, где именно игрок вышел (по последней позиции, которую знает сервер)
+    if (prec && c.pSynced) {
+        if (!prec.dead && c.state) { prec.x = c.state.x; prec.y = c.state.y; prec.z = c.state.z; prec.yaw = c.state.yaw; prec.pitch = c.state.pitch; }
+        if (c.nick) prec.nick = c.nick;
+        prec.at = Date.now(); schedulePersistPlayers(w);
+    }
     for (const o of w.players.values()) { o.sentVer.delete(c.id); o.sentNick.delete(c.id); }
     c.world = null;
     if (wasHost) {
@@ -199,7 +225,7 @@ function handleMessage(c, m) {
             w.host = c; c.isHost = true;
         }
         c.world = w; c.id = id; w.players.set(c.id, c);
-        c.send({ k: 'open', id: c.id, world: c.isHost ? w.saved : undefined });
+        c.send({ k: 'open', id: c.id, world: c.isHost ? w.saved : undefined, pdata: w.pdata[c.id] || undefined });
         if (c.isHost) console.log('[' + w.id + '] новый хозяин, сохранение: ' + (w.saved ? 'есть' : 'нет'));
         return;
     }
@@ -232,6 +258,15 @@ function handleMessage(c, m) {
             c.state = { x: m.x, y: m.y, z: m.z, yaw: m.yaw, pitch: m.pitch, item: HELD_ITEMS.includes(m.item) ? m.item : null, air: !!m.air, tp: Number.isInteger(m.tp) ? m.tp : 0 };
             c.nick = typeof m.nick === 'string' ? cleanNick(m.nick) : '';
             c.ver++; c.fwdPending = true;
+            return;
+        }
+        case 'pinv': { // игрок присылает свой инвентарь и положение — сервер хранит их до следующего захода
+            if (!c.isHost && !c.attached) return;
+            const rec = cleanPlayerRec(m, c.nick);
+            if (!rec) return;
+            c.pSynced = true;
+            if (!w.pdata[c.id] && Object.keys(w.pdata).length >= MAX_PLAYER_RECORDS) return;
+            w.pdata[c.id] = rec; schedulePersistPlayers(w);
             return;
         }
         case 'save': { // хозяин присылает сохранение мира
@@ -331,7 +366,12 @@ setInterval(() => {
 async function main() {
     for (const w of worlds.values()) {
         w.saved = await store.load(w.id);
-        console.log('[' + w.id + '] ' + w.name + ': сохранение ' + (w.saved ? 'загружено' : 'нет'));
+        const pl = await store.load(w.id + '_p');
+        if (pl && pl.players && typeof pl.players === 'object') {
+            const now = Date.now();
+            for (const [id, r] of Object.entries(pl.players)) if (r && typeof r.at === 'number' && now - r.at < PLAYER_KEEP_MS) w.pdata[id] = r;
+        }
+        console.log('[' + w.id + '] ' + w.name + ': сохранение ' + (w.saved ? 'загружено' : 'нет') + ', игроков в базе: ' + Object.keys(w.pdata).length);
     }
     server.listen(PORT, () => console.log('Игровой сервер запущен на порту ' + PORT + ' (миров: ' + worlds.size + ', до ' + MAX_PLAYERS + ' игроков в каждом)'));
 }

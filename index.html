@@ -3614,7 +3614,7 @@
             destroy() { if (this.destroyed) return; this.destroyed = true; try { this.ws.close(); } catch (_) {} }
             _onMsg(m) {
                 switch (m.k) {
-                    case 'open': clearTimeout(this._ct); WSPeer.diag = ''; this.opened = true; this.id = m.id; this.savedWorld = m.world || null; this._emit('open', m.id); break;
+                    case 'open': clearTimeout(this._ct); WSPeer.diag = ''; this.opened = true; this.id = m.id; this.savedWorld = m.world || null; this.pdata = m.pdata || null; this._emit('open', m.id); break;
                     case 'err': this._emit('error', { type: m.type }); break;
                     case 'copen': if (this.hostConn) { this.hostConn.open = true; this.hostConn._emit('open'); } break;
                     case 'conn': { const c = new WSConn(this, m.pid, true); this.conns.set(m.pid, c); this._emit('connection', c); c.open = true; c._emit('open'); break; }
@@ -3775,6 +3775,7 @@
             keys.w = keys.a = keys.s = keys.d = false;
             dead = true;
             updateUI();
+            sendPlayerData(true);
             deathMsgEl.style.opacity = '1';
             clearTimeout(deathTimer);
             deathTimer = setTimeout(() => { deathMsgEl.style.opacity = '0'; }, 2200);
@@ -3814,12 +3815,66 @@
             spawnSeq++; // метка «телепорт»: остальные мгновенно переставят нашу модель, а не будут «возить» её по карте
             lastSent = null; lastSentAt = 0; // сразу сообщить всем, где мы возродились
             netSend({ t: 'respawned' });
+            sendPlayerData(true);
             closeMap();
             updateUI(); updateHpUI();
             controls.lock();
             setTimeout(() => { if (!controls.isLocked && !dead && entered) showPause(); }, 700); // если браузер не дал захватить мышь — покажем паузу с кнопкой «Продолжить»
         }
         deathBtn.addEventListener('click', () => respawnAt(null));
+        controls.addEventListener('lock', () => { if (dead) setTimeout(() => { if (dead) controls.unlock(); }, 0); }); // вошёл с экрана смерти — мышь освобождаем, чтобы выбрать место
+
+        // ---------- сохранение игрока на сервере: инвентарь и место, где вышел ----------
+        // Клиент раз в пару секунд шлёт серверу свой инвентарь и положение; при следующем входе (в тот же мир, с того же браузера)
+        // сервер возвращает запись, и игрок появляется там же с теми же вещами. Пока запись не применена, свою не отправляем —
+        // иначе стартовый набор затёр бы сохранённый.
+        let playerSyncReady = false, playerSyncWorld = null, lastPinvJson = '', lastPinvAt = 0;
+        function applySavedPlayer(rec) {
+            if (rec.dead) { // вышел, будучи мёртвым: снова экран выбора места возрождения
+                gameState.inventory.fill(null); gameState.selectedSlot = 0;
+                if (isNum(rec.x, 2000) && isNum(rec.y, 500) && isNum(rec.z, 2000)) camera.position.set(rec.x, rec.y, rec.z);
+                netSend({ t: 'died', x: r2(camera.position.x), y: r2(camera.position.y), z: r2(camera.position.z) });
+                dead = true; updateUI(); showDeathMap();
+                return;
+            }
+            if (Array.isArray(rec.inv)) {
+                for (let i = 0; i < gameState.inventory.length; i++) {
+                    const c = sanitizeItem(rec.inv[i]);
+                    gameState.inventory[i] = c ? { type: c.type, count: c.count, icon: ITEMS[c.type].icon } : null;
+                }
+                gameState.selectedSlot = Number.isInteger(rec.sel) && rec.sel >= 0 && rec.sel < 9 ? rec.sel : 0;
+            }
+            if (isNum(rec.x, 2000) && isNum(rec.y, 500) && isNum(rec.z, 2000)) {
+                const y = Math.max(rec.y, getTerrainHeight(rec.x, rec.z) + 2.5) + 0.05; // не ниже земли; если фундамент разрушили, просто упадём
+                camera.position.set(rec.x, y, rec.z);
+                const pitch = isNum(rec.pitch, 10) ? THREE.MathUtils.clamp(rec.pitch, -1.5, 1.5) : 0;
+                camera.quaternion.setFromEuler(new THREE.Euler(pitch, isNum(rec.yaw, 10) ? rec.yaw : 0, 0, 'YXZ'));
+                velY = 0; canJump = false;
+                spawnSeq++; lastSent = null; lastSentAt = 0;
+                playerState.invulnUntil = performance.now() + RESPAWN_PROTECT_MS;
+            }
+            updateUI();
+        }
+        function tryApplySavedPlayer() { // вызывается, когда мир уже загружен (у хозяина и у остальных)
+            if (!peer || !peer.isWS || !role) return;
+            if (playerSyncWorld !== worldId) { // только первый вход в этот мир за сессию; при переподключении ничего не откатываем
+                playerSyncWorld = worldId;
+                if (peer.pdata && typeof peer.pdata === 'object') { try { applySavedPlayer(peer.pdata); } catch (e) { console.error('applySavedPlayer', e); } }
+            }
+            playerSyncReady = true; lastPinvJson = '';
+        }
+        function sendPlayerData(force) {
+            if (!peer || !peer.isWS || !role || !playerSyncReady || netLoading()) return;
+            _netEuler.setFromQuaternion(camera.quaternion, 'YXZ');
+            const rec = { k: 'pinv', inv: gameState.inventory.map(s => s ? { type: s.type, count: s.count } : null), sel: gameState.selectedSlot, dead,
+                x: r2(camera.position.x), y: r2(camera.position.y), z: r2(camera.position.z), yaw: r2(_netEuler.y), pitch: r2(_netEuler.x) };
+            const key = JSON.stringify(rec), now = performance.now();
+            if (!force && key === lastPinvJson && now - lastPinvAt < 30000) return;
+            lastPinvJson = key; lastPinvAt = now;
+            peer.sendRaw(rec);
+        }
+        setInterval(() => sendPlayerData(false), 2000);
+        document.addEventListener('visibilitychange', () => { if (document.hidden) sendPlayerData(true); });
         mapCanvas.addEventListener('click', (e) => { // на карте смерти — клик по своему спальнику
             if (!dead) return;
             const r = mapCanvas.getBoundingClientRect();
@@ -4171,6 +4226,7 @@
                     (msg.sleepbags || []).forEach(applySleepbagSet);
                     (msg.stairs || []).forEach(applyStairSet);
                     updateOnlineCount();
+                    if (role === 'client') tryApplySavedPlayer(); // мир загружен — возвращаем игроку его вещи и место, где он вышел
                     break;
                 case 'snap':
                     (msg.p || []).forEach(p => { if (p.id !== myId) applyRemoteState(p.id, p); });
@@ -4596,6 +4652,7 @@
                 saveTicker = makeTicker(() => saveWorldNow(p), 10000);
             }
             updateOnlineCount();
+            tryApplySavedPlayer(); // хозяин: мир восстановлен — возвращаем свои вещи и место
         }
 
         // ---------- подключение / переподключение ----------
@@ -4747,8 +4804,8 @@
         if (USE_WS) makeTicker(cacheWorldLocally, 10000);
 
         // Закрыли вкладку — сразу закрываем соединения, чтобы остальные не ждали таймаут
-        window.addEventListener('beforeunload', () => { try { saveWorldNow(peer); } catch (_) {} try { cacheWorldLocally(); } catch (_) {} try { if (peer) peer.destroy(); } catch (_) {} });
-        window.addEventListener('pagehide', () => { try { saveWorldNow(peer); } catch (_) {} try { if (peer) peer.destroy(); } catch (_) {} });
+        window.addEventListener('beforeunload', () => { try { sendPlayerData(true); } catch (_) {} try { saveWorldNow(peer); } catch (_) {} try { cacheWorldLocally(); } catch (_) {} try { if (peer) peer.destroy(); } catch (_) {} });
+        window.addEventListener('pagehide', () => { try { sendPlayerData(true); } catch (_) {} try { saveWorldNow(peer); } catch (_) {} try { if (peer) peer.destroy(); } catch (_) {} });
 
         // Начинаем показываться другим игрокам, как только нажали "ИГРАТЬ"
         controls.addEventListener('lock', () => { entered = true; lastSentAt = 0; cycleBase = Date.now() / 1000 - MORNING_START; }); // заходим в игру — снова раннее утро
