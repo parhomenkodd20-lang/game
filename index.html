@@ -331,6 +331,7 @@
             door: { id: 'door', icon: '🚪', name: 'Дверь', maxStack: 5, isTool: false },
             cupboard: { id: 'cupboard', icon: '🗄️', name: 'Шкаф', maxStack: 5, isTool: false },
             furnace: { id: 'furnace', icon: '🏭', name: 'Печь', maxStack: 5, isTool: false },
+            cloth: { id: 'cloth', icon: '🧶', name: 'Ткань', maxStack: 20, isTool: false },
             spear: { id: 'spear', icon: '🔱', name: 'Копьё', maxStack: 1, isTool: true }
         };
 
@@ -1730,7 +1731,9 @@
 
         // ---------- медведи: бродят по острову, замечают игрока, бегут за ним и бьют (логика считается у хозяина мира) ----------
         const BEAR_MAX = 5;                 // сколько медведей одновременно в мире
-        const BEAR_HP = 200, BEAR_DMG = 30; // здоровье и урон за удар
+        const BEAR_HP = 300, BEAR_DMG = 30; // здоровье и урон за удар
+        const BEAR_ENRAGE_HP = 100, BEAR_RUN_ENRAGED = 11; // когда осталось 100 ХП — звереет и бежит быстрее
+        const CLOTH_PER_BEAR = 20, CARCASS_LIFE_MS = 5 * 60 * 1000; // ткани с туши и сколько лежит туша, если её не разделали
         const BEAR_ATK_CD = 2;              // секунд между ударами
         const BEAR_WINDUP = 0.25;           // замах перед ударом (короткий — бьёт сразу, как достал)
         const BEAR_SCALE = 1.6;             // размер модели в мире (модель из студии маленькая)
@@ -1744,6 +1747,7 @@
         const BEAR_GIVEUP_S = 5;             // сколько пытается достать недосягаемого игрока (на фундаменте, за стеной), потом уходит
         const BEAR_RESPAWN_S = 12;          // через сколько секунд после гибели появится новый
         const bears = new Map();            // id -> запись медведя (и у хозяина, и у остальных)
+        const carcasses = new Map();        // id -> туша убитого медведя (лежит на боку, с неё берут ткань)
         let bearSpawnAt = [], bearSeq = 0, bearLast = Date.now();
         function buildBearMesh() { // модель из студии
             const root = new THREE.Group(), pivot = new THREE.Group(), g = new THREE.Group();
@@ -1942,7 +1946,7 @@
                     } else if (d <= BEAR_REACH) {
                         b.rot += Math.max(-8 * dt, Math.min(8 * dt, angDiff(want, b.rot)));
                         if (b.atkCd <= 0 && reachable && Math.abs(angDiff(want, b.rot)) < 1.1) b.windup = BEAR_WINDUP; // достал — бьёт сразу, дальше перезарядка
-                    } else bearWalkTo(b, t2.x, t2.z, BEAR_RUN, dt);
+                    } else bearWalkTo(b, t2.x, t2.z, b.hp <= BEAR_ENRAGE_HP ? BEAR_RUN_ENRAGED : BEAR_RUN, dt);
                     return;
                 }
                 // спокойное поведение: 1) стоит и раз в 3 секунды чуть двигается, 2) идёт в выбранную неподалёку точку; чередуются случайно
@@ -1959,11 +1963,32 @@
                     b.idleT = 3 + Math.random() * 6;
                 }
             });
-            hostBroadcast({ t: 'bears', b: [...bears.values()].map(b => [b.id, r2(b.x), r2(b.z), r2(b.rot), b.aggro ? 1 : 0, Math.round(b.hp), b.windup > 0 ? 1 : 0, b.moving ? 1 : 0]) });
+            carcasses.forEach(c => { if (now - c.t > CARCASS_LIFE_MS) { hostBroadcast({ t: 'carcassgone', id: c.id }); removeCarcass(c); } });
+            hostBroadcast({ t: 'bears', b: [...bears.values()].map(b => [b.id, r2(b.x), r2(b.z), r2(b.rot), b.aggro ? 1 : 0, Math.round(b.hp), b.windup > 0 ? 1 : 0, b.moving ? 1 : 0]),
+                c: [...carcasses.values()].map(c => [c.id, r2(c.x), r2(c.z), r2(c.rot), c.cloth]) });
         }
         makeTicker(bearTick, 100);
-        function applyBearSnap(list) { // остальные игроки получают положения медведей от хозяина
+        function removeCarcass(c) { scene.remove(c.mesh.root); carcasses.delete(c.id); }
+        function bearToCarcass(b, fallen) { // убитый медведь не исчезает — падает на бок и остаётся тушей
+            dropColliders([b.collider]); bears.delete(b.id);
+            b.mesh.parts.forEach(q => q.material.emissive.setHex(0));
+            b.mesh.legs.forEach(l => { l.m.position.z = l.z0; });
+            b.mesh.pivot.rotation.x = 0;
+            carcasses.set(b.id, { id: b.id, x: b.rx, z: b.rz, rot: b.rrot, mesh: b.mesh, fallT: fallen ? 1 : 0, cloth: CLOTH_PER_BEAR, sc: b.sc, t: Date.now() });
+        }
+        function applyBearSnap(list, clist) { // остальные игроки получают положения медведей от хозяина
             if (role === 'host' || !Array.isArray(list)) return;
+            if (Array.isArray(clist)) {
+                const seenC = new Set();
+                clist.forEach(a => {
+                    if (!Array.isArray(a) || typeof a[0] !== 'string' || !isNum(a[1], 2000) || !isNum(a[2], 2000)) return;
+                    seenC.add(a[0]);
+                    let c = carcasses.get(a[0]);
+                    if (!c) { const nb = bearCreate(a[0], a[1], a[2], a[3], 0); bears.delete(a[0]); dropColliders([nb.collider]); nb.sc = 1; carcasses.set(a[0], { id: a[0], x: a[1], z: a[2], rot: a[3], mesh: nb.mesh, fallT: 1, cloth: a[4], sc: 1, t: Date.now() }); c = carcasses.get(a[0]); }
+                    c.cloth = a[4];
+                });
+                [...carcasses.values()].forEach(c => { if (!seenC.has(c.id)) removeCarcass(c); });
+            }
             const seen = new Set();
             list.forEach(a => {
                 if (!Array.isArray(a) || typeof a[0] !== 'string' || !isNum(a[1], 2000) || !isNum(a[2], 2000)) return;
@@ -1997,6 +2022,27 @@
                 if (b.hurt > 0) { b.hurt -= dt; if (b.hurt <= 0) m.parts.forEach(p => p.material.emissive.setHex(0)); }
                 b.collider.x = b.rx; b.collider.z = b.rz;
             });
+        }
+        function updateCarcasses(dt) {
+            carcasses.forEach(c => {
+                if (c.fallT < 1) c.fallT = Math.min(1, c.fallT + dt / 0.6);
+                const e = 1 - Math.pow(1 - c.fallT, 3); // падает на бок и замирает
+                const m = c.mesh;
+                m.root.position.set(c.x, getTerrainHeight(c.x, c.z), c.z); m.root.rotation.y = c.rot;
+                m.root.scale.setScalar(BEAR_SCALE * (c.sc || 1));
+                m.pivot.rotation.z = Math.PI / 2 * e; m.pivot.position.set(0.65 * e, 0.45 * e, 0);
+            });
+        }
+        function tryHarvestCarcass(item, blockDist) { // ударить тушу камнем, киркой или топором — получить ткань
+            if (!carcasses.size || !(item.type === 'stone' || item.type === 'pickaxe' || item.type === 'axe')) return false;
+            const roots = []; carcasses.forEach(c => roots.push(c.mesh.root));
+            const ph = raycaster.intersectObjects(roots, true)[0];
+            if (!ph || ph.distance > 5 || ph.distance > blockDist) return false;
+            let o = ph.object; while (o && !o.userData.bearId) o = o.parent;
+            if (!o) return false;
+            spawnBlood(ph.point.x, ph.point.y, ph.point.z, 4);
+            netSend({ t: 'carcasshit', id: o.userData.bearId });
+            return true;
         }
         function tryHitBear(item, blockDist) {
             if (!bears.size || !DAMAGE[item.type]) return false;
@@ -2851,6 +2897,7 @@
             const intersects = raycaster.intersectObjects(targets);
             // Сначала проверяем, не бьём ли мы другого игрока (если он ближе дерева/камня)
             const blockD = intersects.length ? intersects[0].distance : Infinity;
+            if (tryHarvestCarcass(currentItem, blockD)) return;
             if (tryHitBear(currentItem, blockD)) return;
             if (tryHitPlayer(currentItem, blockD)) return;
             if (intersects.length === 0 || intersects[0].distance > 4) return;
@@ -4001,9 +4048,10 @@
                 case 'doorlock': { const d = doors.get(msg.id); if (d && !d.locked) { setDoorLocked(d, msg.owner); if (msg.owner === myId) { removeFromInventory('lock', 1); updateUI(); } } break; }
                 case 'doorstate': { const d = doors.get(msg.id); if (d) setDoorOpen(d, msg.open); break; }
                 case 'tcset': applyTcSet(msg); break;
-                case 'bears': applyBearSnap(msg.b); break;
+                case 'bears': applyBearSnap(msg.b, msg.c); break;
+                case 'carcassgone': { const c = carcasses.get(msg.id); if (c) removeCarcass(c); break; }
                 case 'bearhurt': { const b = bears.get(msg.id); if (b) { b.hp = msg.hp; b.hurt = 0.15; b.mesh.parts.forEach(q => q.material.emissive.setHex(0x992222)); } break; }
-                case 'bearkill': { const b = bears.get(msg.id); if (b) { spawnBlood(b.rx, getTerrainHeight(b.rx, b.rz) + 1.5, b.rz, 30); removeBear(b); } break; }
+                case 'bearkill': { const b = bears.get(msg.id); if (b) { spawnBlood(b.rx, getTerrainHeight(b.rx, b.rz) + 1.5, b.rz, 30); bearToCarcass(b, false); } break; }
                 case 'furnaceset': applyFurnaceSet(msg); break;
                 case 'furnacestate': applyFurnaceState(msg); break;
                 case 'respawn': applyRespawn(msg); break;
@@ -4260,6 +4308,20 @@
                     if (f.on) { f.on = false; f.why = ''; }
                     else { const r = furnaceSmelt(f, true); if (r === 'ok' || r === 'noroom') { f.on = true; f.why = r === 'noroom' ? 'noroom' : ''; } else f.why = r; }
                     hostAll(furnaceStateMsg(f));
+                    break;
+                }
+                case 'carcasshit': { // разделка туши: камень 2 ткани, кирка и топор по 4
+                    const c = typeof m.id === 'string' ? carcasses.get(m.id) : null;
+                    if (!c || !p.state) return;
+                    const nowC = performance.now();
+                    if (nowC - (p.lastCarc || 0) < 250) return; p.lastCarc = nowC;
+                    const per = { stone: 2, pickaxe: 4, axe: 4 }[p.state.item];
+                    if (!per || Math.hypot(p.state.x - c.x, p.state.z - c.z) > 10) return;
+                    const amt = Math.min(per, c.cloth);
+                    if (amt < 1) return;
+                    c.cloth -= amt;
+                    sendTo(fromId, { t: 'given', type: 'cloth', count: amt });
+                    if (c.cloth <= 0) { hostBroadcast({ t: 'carcassgone', id: c.id }); removeCarcass(c); } // всё срезали — туша пропадает
                     break;
                 }
                 case 'bearhit': { // удар по медведю: проверяем дальность и отнимаем здоровье
@@ -4734,7 +4796,7 @@
             localHeld = isTool ? currentItem.type : null;
             updateRemotePlayers(dt);
             if (bricksDirty) refreshWallBricks();
-            updateBears(dt);
+            updateBears(dt); updateCarcasses(dt);
             updateBlood(dt); updateBags(dt);
             netTick(time);
 
