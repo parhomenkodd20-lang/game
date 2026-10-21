@@ -332,7 +332,8 @@
             cupboard: { id: 'cupboard', icon: '🗄️', name: 'Шкаф', maxStack: 5, isTool: false },
             furnace: { id: 'furnace', icon: '🏭', name: 'Печь', maxStack: 5, isTool: false },
             cloth: { id: 'cloth', icon: '🧶', name: 'Ткань', maxStack: 20, isTool: false },
-            spear: { id: 'spear', icon: '🔱', name: 'Копьё', maxStack: 1, isTool: true }
+            spear: { id: 'spear', icon: '🔱', name: 'Копьё', maxStack: 1, isTool: true },
+            sleepbag: { id: 'sleepbag', icon: '🛏️', name: 'Спальник', maxStack: 5, isTool: false }
         };
 
         const RECIPES = [
@@ -380,6 +381,11 @@
                 id: 'furnace', name: 'Печь', icon: '🏭',
                 ingredients: { stone_material: 30, wood: 10 },
                 result: { type: 'furnace', count: 1, icon: '🏭', isTool: false }
+            },
+            {
+                id: 'sleepbag', name: 'Спальник', icon: '🛏️',
+                ingredients: { cloth: 20 },
+                result: { type: 'sleepbag', count: 1, icon: '🛏️', isTool: false }
             }
         ];
 
@@ -1041,7 +1047,7 @@
             }
             return null;
         }
-        const pieceMaps = () => ({ foundation: foundations, wall: walls, roof: roofs, door: doors, cupboard: cupboards, stair: stairs, furnace: furnaces });
+        const pieceMaps = () => ({ foundation: foundations, wall: walls, roof: roofs, door: doors, cupboard: cupboards, stair: stairs, furnace: furnaces, sleepbag: sleepbags });
         const dropColliders = (list) => (list || []).forEach(c => { const i = colliders.indexOf(c); if (i >= 0) colliders.splice(i, 1); });
         function samePos(a, b) { return Math.abs(a.x - b.x) < 0.4 && Math.abs(a.z - b.z) < 0.4 && Math.abs(a.y - b.y) < 0.4; }
         function removeDoor(d) { scene.remove(d.mesh); if (d.collider) dropColliders([d.collider]); doors.delete(d.id); }
@@ -1052,7 +1058,7 @@
         function removeRoof(r) { scene.remove(r.mesh); dropColliders(r.colliders); roofs.delete(r.id); }
         function applyPieceUpgrade(m) { // улучшаем ТОЛЬКО эту часть: фундамент, стену или крышу
             const rec = (pieceMaps()[m.kind] || new Map()).get(m.id);
-            if (!rec || rec.material === 'stone' || m.kind === 'door' || m.kind === 'cupboard' || m.kind === 'furnace') return;
+            if (!rec || rec.material === 'stone' || m.kind === 'door' || m.kind === 'cupboard' || m.kind === 'furnace' || m.kind === 'sleepbag') return;
             rec.material = 'stone';
             rec.hp = Math.min(400, (rec.hp || 200) * 2); // у каменных частей 400 ХП
             if (m.kind === 'foundation') applyFoundationMaterial(rec);
@@ -1070,11 +1076,13 @@
             else if (m.kind === 'roof') removeRoof(rec);
             else if (m.kind === 'cupboard') removeTc(rec);
             else if (m.kind === 'furnace') removeFurnace(rec);
+            else if (m.kind === 'sleepbag') removeSleepbag(rec);
             else if (m.kind === 'stair') removeStair(rec);
             else {
                 [...stairs.values()].forEach(st => { if (ownerFoundation(st.x, st.y, st.z, 'wall') === rec) removeStair(st); });
                 [...cupboards.values()].forEach(t => { if (Math.abs(t.x - rec.x) <= 3.1 && Math.abs(t.z - rec.z) <= 3.1 && Math.abs(t.y - (rec.y + 0.35)) < 0.5) removeTc(t); }); // фундамент: всё, что стоит на нём, рушится вместе с ним
                 [...furnaces.values()].forEach(t => { if (Math.abs(t.x - rec.x) <= 3.1 && Math.abs(t.z - rec.z) <= 3.1 && Math.abs(t.y - (rec.y + 0.35)) < 0.5) removeFurnace(t); });
+                [...sleepbags.values()].forEach(t => { if (Math.abs(t.x - rec.x) <= 3.1 && Math.abs(t.z - rec.z) <= 3.1 && Math.abs(t.y - (rec.y + 0.35)) < 0.5) removeSleepbag(t); });
                 [...walls.values()].forEach(w => { if (ownerFoundation(w.x, w.y, w.z, 'wall') === rec) removeWall(w); });
                 [...roofs.values()].forEach(r => { if (ownerFoundation(r.x, r.y, r.z, 'roof') === rec) removeRoof(r); });
                 scene.remove(rec.mesh); dropColliders(rec.colliders); foundations.delete(rec.id);
@@ -1242,6 +1250,7 @@
         function clearWallsAndRoofs() {
             cupboards.forEach(t => scene.remove(t.mesh)); cupboards.clear();
             furnaces.forEach(t => scene.remove(t.mesh)); furnaces.clear();
+            sleepbags.forEach(t => scene.remove(t.mesh)); sleepbags.clear();
             furnaceOpenId = null;
             stairs.forEach(t => scene.remove(t.mesh)); stairs.clear();
             doors.forEach(d => scene.remove(d.mesh)); doors.clear();
@@ -1666,6 +1675,79 @@
         setInterval(() => { if (furnaceOpenId && gameState.isInventoryOpen) renderFurnacePanel(); }, 1000);
 
         // Печь в руках: ставится на землю или на фундамент, лицом к игроку
+        // ---------- спальник: ставится на фундамент или землю, на карте после смерти можно возродиться у него ----------
+        const SLEEP_SCALE = 1.3;
+        const sleepbags = new Map(); // id -> { id, x, y, z, rot, mesh, owner, createdAt }
+        function buildSleepbagMesh() { // модель из студии (лицо +Z, низ на y=0)
+            const root = new THREE.Group();
+            const g = new THREE.Group();
+            const solid = (c) => new THREE.MeshLambertMaterial({ color: c, flatShading: true });
+            let m;
+            m = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.3, 2.1), solid(0x2f437f)); m.position.set(0, 0.2, 0); g.add(m);
+            m = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.2, 0.5), solid(0xc9ccd1)); m.position.set(0, 0.4, -0.6); g.add(m);
+            g.scale.setScalar(SLEEP_SCALE); g.position.y = -0.05 * SLEEP_SCALE; // основание модели лежит на 0.05 выше нуля — опускаем, чтобы лежал на полу
+            root.add(g);
+            return root;
+        }
+        function applySleepbagSet(m) {
+            if (!m || typeof m.id !== 'string' || !isNum(m.x, 2000) || !isNum(m.y, 500) || !isNum(m.z, 2000)) return;
+            if (m.cid) pendingBuilds.delete(m.cid);
+            if (sleepbags.has(m.id)) return;
+            const g = buildSleepbagMesh();
+            g.position.set(m.x, m.y, m.z); g.rotation.y = m.rot || 0;
+            g.userData.b = { kind: 'sleepbag' };
+            scene.add(g);
+            sleepbags.set(m.id, { id: m.id, x: m.x, y: m.y, z: m.z, rot: m.rot || 0, mesh: g, owner: typeof m.owner === 'string' ? m.owner : '', createdAt: typeof m.createdAt === 'number' ? m.createdAt : Date.now() });
+        }
+        function removeSleepbag(b) { scene.remove(b.mesh); sleepbags.delete(b.id); }
+        const sleepbagGhost = buildSleepbagMesh(); sleepbagGhost.visible = false; scene.add(sleepbagGhost);
+        function updateSleepbagGhost(dt) {
+            camera.getWorldDirection(_fwdVec);
+            const rot = Math.round(Math.atan2(-_fwdVec.x, -_fwdVec.z) / (Math.PI / 2)) * (Math.PI / 2) + placeRotAdd();
+            raycaster.setFromCamera(center, camera);
+            const targets = []; foundations.forEach(f => targets.push(f.mesh));
+            const hits = raycaster.intersectObjects(targets, true);
+            let px = 0, pz = 0, y = 0, found = false, reason = '';
+            if (hits.length && hits[0].distance <= FOUNDATION_PLACE_MAX) {
+                const hp = hits[0].point;
+                for (const f of foundations.values()) {
+                    if (Math.abs(hp.x - f.x) <= FOUNDATION_GRID / 2 + 0.1 && Math.abs(hp.z - f.z) <= FOUNDATION_GRID / 2 + 0.1 && Math.abs(hp.y - (f.y + 0.35)) < 0.8) {
+                        px = THREE.MathUtils.clamp(hp.x, f.x - 2.2, f.x + 2.2); pz = THREE.MathUtils.clamp(hp.z, f.z - 2.2, f.z + 2.2); y = f.y + 0.35; found = true; break;
+                    }
+                }
+            }
+            if (!found) {
+                const o = camera.position;
+                for (let d = 1; d <= 8; d += 0.2) {
+                    const x = o.x + _fwdVec.x * d, z = o.z + _fwdVec.z * d, gy = getTerrainHeight(x, z);
+                    if (o.y + _fwdVec.y * d <= gy) { px = x; pz = z; y = gy; found = true; break; }
+                }
+                if (found && [...foundations.values()].some(f => Math.abs(px - f.x) <= 3.2 && Math.abs(pz - f.z) <= 3.2)) { found = false; reason = 'Ставь спальник на фундамент или рядом'; }
+                else if (!found) reason = 'Посмотри на землю или фундамент';
+            }
+            let valid = found;
+            if (found) {
+                const dup = [...sleepbags.values()].some(t => Math.hypot(t.x - px, t.z - pz) < 1.6 && Math.abs(t.y - y) < 1) || [...furnaces.values(), ...cupboards.values()].some(t => Math.hypot(t.x - px, t.z - pz) < 2.1 && Math.abs(t.y - y) < 1);
+                if (dup) { valid = false; reason = 'Здесь уже что-то стоит'; }
+                else if (tcBlocked(px, pz, myId)) { valid = false; reason = 'Зона шкафа: сначала открой тот шкаф (ЛКМ по нему)'; }
+            }
+            if (found) { smoothGhostTo(sleepbagGhost, px, y, pz, dt); sleepbagGhost.rotation.y = rot; }
+            else { sleepbagGhost.position.copy(camera.position).addScaledVector(_fwdVec, 4); sleepbagGhost.rotation.y = rot; }
+            ghostValid = valid; ghostPlace = found ? { kind: 'sleepbag', x: px, y, z: pz, rot } : null;
+            setGhostMat(sleepbagGhost, valid ? foundationGhostMat : foundationGhostBadMat);
+            buildHintEl.textContent = reason;
+            buildHintEl.style.display = reason ? 'block' : 'none';
+        }
+        function placeSleepbag() {
+            if (!ghostPlace || ghostPlace.kind !== 'sleepbag' || !ghostValid || gameState.attackCooldown > 0) return false;
+            gameState.attackCooldown = 0.35;
+            removeFromInventory('sleepbag', 1); updateUI();
+            const cid = 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+            netSend({ t: 'build', kind: 'sleepbag', x: ghostPlace.x, y: ghostPlace.y, z: ghostPlace.z, rot: ghostPlace.rot, cid });
+            return true;
+        }
+        function isHoldingSleepbagItem() { const it = gameState.inventory[gameState.selectedSlot]; return !!(it && it.type === 'sleepbag'); }
+
         function updateFurnaceGhost(dt) {
             camera.getWorldDirection(_fwdVec);
             const rot = Math.round(Math.atan2(-_fwdVec.x, -_fwdVec.z) / (Math.PI / 2)) * (Math.PI / 2) + placeRotAdd();
@@ -1795,7 +1877,7 @@
         function bearPlayers() { // кого медведь вообще может заметить: живые, не только что возродившиеся
             const out = [], pnow = performance.now();
             hostPlayers.forEach((v, pid) => {
-                if (pnow < (v.protUntil || 0) || pnow - (v.lastDied || -1e9) < 4000) return;
+                if (v.dead || pnow < (v.protUntil || 0) || pnow - (v.lastDied || -1e9) < 4000) return;
                 if (pid === myId) { out.push({ pid, x: camera.position.x, z: camera.position.z, gy: camera.position.y - 2.5 }); return; }
                 if (v.state) out.push({ pid, x: v.state.x, z: v.state.z, gy: v.state.y - 2.5 });
             });
@@ -1863,7 +1945,7 @@
             return null;
         }
         function hostHurtPlayer(pid, dmg) { // урон игроку от хозяина (так же, как удар другого игрока)
-            const v = hostPlayers.get(pid); if (!v) return false;
+            const v = hostPlayers.get(pid); if (!v || v.dead) return false;
             const b = pid === myId ? { x: camera.position.x, y: camera.position.y, z: camera.position.z } : v.state;
             if (!b) return false;
             const now = performance.now();
@@ -1872,7 +1954,7 @@
             const hpLeft = hostHpNow(v, now) - dmg;
             v.hpAt = now; v.hurtAt = now;
             if (hpLeft <= 0) {
-                killed = true; v.hp = MAX_HP; v.protUntil = now + RESPAWN_PROTECT_MS; v.lastDied = now;
+                killed = true; v.hp = MAX_HP; v.protUntil = now + RESPAWN_PROTECT_MS; v.lastDied = now; v.dead = true;
                 if (pid !== myId) remoteDied(pid, b.x, b.y, b.z);
                 hostBroadcast({ t: 'died', id: pid, x: b.x, y: b.y, z: b.z });
             } else v.hp = hpLeft;
@@ -2181,6 +2263,21 @@
                 mapCtx.font = '20px sans-serif'; mapCtx.textAlign = 'center'; mapCtx.textBaseline = 'middle';
                 mapCtx.fillStyle = '#fff'; mapCtx.fillText('🗄️', x, y);
             });
+            // твои спальники — по ним можно возродиться после смерти
+            sleepbags.forEach(b => {
+                if (b.owner !== myId) return;
+                const x = mapPx(b.x), y = mapPx(b.z);
+                mapCtx.beginPath(); mapCtx.arc(x, y, 15, 0, Math.PI * 2);
+                mapCtx.fillStyle = 'rgba(52,120,246,0.35)'; mapCtx.fill();
+                mapCtx.lineWidth = 3; mapCtx.strokeStyle = '#4da3ff'; mapCtx.stroke();
+                mapCtx.font = '19px sans-serif'; mapCtx.textAlign = 'center'; mapCtx.textBaseline = 'middle';
+                mapCtx.fillStyle = '#fff'; mapCtx.fillText('🛏️', x, y + 1);
+            });
+            if (dead) {
+                const dn = '☠ Вы погибли — нажмите на свой спальник 🛏️ или «Появиться на пляже»';
+                if (mapTitle.textContent !== dn) mapTitle.textContent = dn;
+                return;
+            }
             // ты: стрелка по направлению взгляда + подсветка твоего квадрата
             camera.getWorldDirection(_fwdVec);
             const cell = mapCellIndex(camera.position.x, camera.position.z);
@@ -2194,12 +2291,13 @@
             mapCtx.restore();
         }
         function toggleMap() {
+            if (dead) return;
             if (mapOpen) { closeMap(); return; }
             if (!controls.isLocked || gameState.isInventoryOpen) return;
             if (!mapTerrain) buildMapTerrain();
             mapOpen = true; mapOverlay.style.display = 'flex'; drawMap();
         }
-        function closeMap() { mapOpen = false; mapOverlay.style.display = 'none'; }
+        function closeMap() { mapOpen = false; mapOverlay.style.display = 'none'; mapOverlay.style.pointerEvents = 'none'; if (typeof deathBtn !== 'undefined') deathBtn.style.display = 'none'; }
         setInterval(() => { if (mapOpen) drawMap(); }, 100);
 
 
@@ -2406,6 +2504,8 @@
             tcGhost.visible = holdingTc;
             const holdingFurnace = !!(currentItem && currentItem.type === 'furnace' && controls.isLocked && !netLoading());
             furnaceGhost.visible = holdingFurnace;
+            const holdingBag = !!(currentItem && currentItem.type === 'sleepbag' && controls.isLocked && !netLoading());
+            sleepbagGhost.visible = holdingBag;
             const holding = !!(currentItem && currentItem.type === 'chertyozh' && controls.isLocked && !netLoading());
             foundationGhost.visible = holding && buildMode === 'foundation';
             wallGhost.visible = holding && (buildMode === 'wall' || buildMode === 'door' || buildMode === 'window');
@@ -2415,6 +2515,7 @@
             if (holdingDoor) { updateDoorGhost(dt); return; }
             if (holdingTc) { updateTcGhost(dt); return; }
             if (holdingFurnace) { updateFurnaceGhost(dt); return; }
+            if (holdingBag) { updateSleepbagGhost(dt); return; }
             if (!holding) { ghostPlace = null; ghostSmoothPos = null; buildHintEl.style.display = 'none'; return; }
 
             camera.getWorldDirection(_fwdVec);
@@ -2853,6 +2954,7 @@
         window.addEventListener('keydown', (e) => {
             if (e.target && e.target.tagName === 'INPUT') return; // печатаем ник — игровые клавиши не трогаем
             lastGestureAt = performance.now();
+            if (dead) return; // пока выбираешь место возрождения, игра на клавиши не отвечает
             if (e.code === 'Tab') {
                 e.preventDefault(); closeMap();
                 if (gameState.isInventoryOpen) closeInventory();
@@ -2864,7 +2966,7 @@
             }
             if (e.code === 'KeyR' && !e.repeat && controls.isLocked && !gameState.isInventoryOpen && !netLoading()) { // R — повернуть шкаф, печь или лестницу в руках на 90°
                 const it = gameState.inventory[gameState.selectedSlot];
-                if (it && (it.type === 'cupboard' || it.type === 'furnace' || (it.type === 'chertyozh' && buildMode === 'stair'))) placeRotStep = (placeRotStep + 1) % 4;
+                if (it && (it.type === 'cupboard' || it.type === 'furnace' || it.type === 'sleepbag' || (it.type === 'chertyozh' && buildMode === 'stair'))) placeRotStep = (placeRotStep + 1) % 4;
             }
             if (e.code === 'KeyG' && !e.repeat && !netLoading()) toggleMap(); // KeyG — это и «G», и «П» на русской раскладке
             if (gameState.isInventoryOpen) return;
@@ -2997,12 +3099,12 @@
             repairWheelEl.appendChild(el); repairSegs[mode] = el;
         });
         function isHoldingMallet() { const it = gameState.inventory[gameState.selectedSlot]; return !!(it && it.type === 'mallet'); }
-        const PIECE_NAMES = { foundation: 'фундамент', wall: 'стену', roof: 'крышу', door: 'дверь', cupboard: 'шкаф', stair: 'лестницу', furnace: 'печь' };
-        const PIECE_TITLES = { foundation: 'Фундамент', wall: 'Стена', roof: 'Крыша', door: 'Дверь', cupboard: 'Шкаф', stair: 'Лестница', furnace: 'Печь' };
+        const PIECE_NAMES = { foundation: 'фундамент', wall: 'стену', roof: 'крышу', door: 'дверь', cupboard: 'шкаф', stair: 'лестницу', furnace: 'печь', sleepbag: 'спальник' };
+        const PIECE_TITLES = { foundation: 'Фундамент', wall: 'Стена', roof: 'Крыша', door: 'Дверь', cupboard: 'Шкаф', stair: 'Лестница', furnace: 'Печь', sleepbag: 'Спальник' };
         function aimedPiece(doorsOnly) {
             raycaster.setFromCamera(center, camera);
             const targets = [];
-            doors.forEach(d => targets.push(d.mesh)); cupboards.forEach(t => targets.push(t.mesh)); furnaces.forEach(t => targets.push(t.mesh));
+            doors.forEach(d => targets.push(d.mesh)); cupboards.forEach(t => targets.push(t.mesh)); furnaces.forEach(t => targets.push(t.mesh)); sleepbags.forEach(t => targets.push(t.mesh));
             if (!doorsOnly) { foundations.forEach(f => targets.push(f.mesh)); walls.forEach(w => targets.push(w.mesh)); roofs.forEach(r => targets.push(r.mesh)); stairs.forEach(t => targets.push(t.mesh)); }
             const hits = raycaster.intersectObjects(targets, true);
             if (!hits.length || hits[0].distance > 7) return null;
@@ -3024,7 +3126,7 @@
             const left = DEMOLISH_WINDOW_MS - (Date.now() - f.createdAt);
             const pending = pendingBuilds.has(f.id);
             const name = PIECE_NAMES[t.kind];
-            const noUp = t.kind === 'door' || t.kind === 'cupboard' || t.kind === 'furnace';
+            const noUp = t.kind === 'door' || t.kind === 'cupboard' || t.kind === 'furnace' || t.kind === 'sleepbag';
             const up = { ok: !noUp && f.material !== 'stone' && have >= UPGRADE_STONE_COST && !pending };
             if (noUp) up.text = '🪨 Улучшить<br>не улучшается';
             else if (f.material === 'stone') up.text = '🪨 Уже каменная';
@@ -3073,6 +3175,7 @@
             if (e.button === 0 && !wheelOpen && !repairOpen && !netLoading() && isHoldingDoorItem() && placeDoor()) return; // дверь в руках — ставим в проём
             if (e.button === 0 && !wheelOpen && !repairOpen && !netLoading() && isHoldingTcItem() && placeCupboard()) return; // шкаф в руках — ставим на фундамент
             if (e.button === 0 && !wheelOpen && !repairOpen && !netLoading() && isHoldingFurnaceItem() && placeFurnace()) return; // печь в руках — ставим
+            if (e.button === 0 && !wheelOpen && !repairOpen && !netLoading() && isHoldingSleepbagItem() && placeSleepbag()) return; // спальник в руках — ставим
             if (e.button === 0 && !wheelOpen && !repairOpen && gameState.attackCooldown <= 0 && !netLoading() && !isHoldingBlueprint()) {
                 const mallet = isHoldingMallet();
                 const piece = aimedPiece(!mallet); // киянка видит любую часть, остальные предметы — только двери
@@ -3106,9 +3209,9 @@
             updateWheelHighlight();
         });
         controls.addEventListener('lock', () => { document.getElementById('main-menu').style.display = 'none'; });
-        controls.addEventListener('unlock', () => { closeRepairWheel(false); closeMap(); });
+        controls.addEventListener('unlock', () => { if (dead) return; closeRepairWheel(false); closeMap(); });
         controls.addEventListener('unlock', () => { // Esc: до первого входа — стартовое меню, потом — окно паузы
-            if (gameState.isInventoryOpen) return;
+            if (dead || gameState.isInventoryOpen) return;
             if (entered) showPause(); else document.getElementById('main-menu').style.display = 'flex';
         });
 
@@ -3150,7 +3253,7 @@
         document.getElementById('pause-resume').addEventListener('click', () => controls.lock());
         pauseRespawn.addEventListener('click', () => { pauseRespawn.style.display = 'none'; pauseConfirm.style.display = 'block'; }); // сначала спрашиваем, уверен ли
         document.getElementById('pause-no').addEventListener('click', () => { pauseConfirm.style.display = 'none'; pauseRespawn.style.display = 'block'; });
-        document.getElementById('pause-yes').addEventListener('click', () => { die(); pauseEl.style.display = 'none'; controls.lock(); }); // рюкзак выпадает, как при смерти, и возрождаемся на пляже
+        document.getElementById('pause-yes').addEventListener('click', () => { die(); pauseEl.style.display = 'none'; }); // рюкзак выпадает, как при смерти, и возрождаемся на пляже
         // --- СЛУЧАЙНЫЙ СПАВН НА ПЛЯЖЕ ---
         const spawnAngle = Math.random() * Math.PI * 2;
         const spawnRadius = BEACH_START + 12 + Math.random() * (SAND_FLAT_END - BEACH_START - 24); // где-то в середине сухого пляжа
@@ -3640,8 +3743,9 @@
         }
 
         // ---------- получение урона и смерть ----------
+        let dead = false; // погиб и выбирает на карте, где возродиться
         function applyDamage(d, kill) {
-            if (netLoading()) return;
+            if (netLoading() || dead) return;
             const now = performance.now();
             if (now < playerState.invulnUntil) return;
             playerState.hp = Math.max(0, playerState.hp - d);
@@ -3657,35 +3761,73 @@
             return { x: Math.cos(a) * r, z: Math.sin(a) * r, angle: a };
         }
 
-        function die() {
+        function die() { // смерть: тело пропадает, рюкзак падает сумкой, открывается карта выбора места возрождения
+            if (dead) return;
             // 1) всё содержимое инвентаря уходит в сумку на месте смерти
             const items = [];
             gameState.inventory.forEach(sl => { if (sl) items.push({ type: sl.type, count: sl.count }); });
             netSend({ t: 'bag', x: r2(camera.position.x), y: r2(camera.position.y - 2.5), z: r2(camera.position.z), items });
             netSend({ t: 'died', x: r2(camera.position.x), y: r2(camera.position.y), z: r2(camera.position.z) }); // остальные сразу убирают тело
-
-            // 2) новая жизнь: камень и факел, полное здоровье, случайное место на пляже
+            gameState.inventory.fill(null);
+            gameState.selectedSlot = 0;
+            if (gameState.isInventoryOpen) closeInventory();
+            closeRepairWheel(false);
+            keys.w = keys.a = keys.s = keys.d = false;
+            dead = true;
+            updateUI();
+            deathMsgEl.style.opacity = '1';
+            clearTimeout(deathTimer);
+            deathTimer = setTimeout(() => { deathMsgEl.style.opacity = '0'; }, 2200);
+            showDeathMap();
+        }
+        const deathBtn = document.createElement('button');
+        deathBtn.textContent = '🏖️ Появиться на пляже';
+        deathBtn.style.cssText = 'display:none;padding:12px 28px;font:700 17px sans-serif;border:0;border-radius:10px;background:#e8b923;color:#222;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,0.5);';
+        mapOverlay.append(deathBtn);
+        function showDeathMap() {
+            pauseEl.style.display = 'none';
+            if (!mapTerrain) buildMapTerrain();
+            mapOpen = true; mapOverlay.style.pointerEvents = 'auto'; mapOverlay.style.display = 'flex'; deathBtn.style.display = 'block';
+            drawMap();
+            controls.unlock();
+        }
+        function respawnAt(bag) { // bag — запись спальника, null — случайное место на пляже
+            if (!dead) return;
+            dead = false;
             gameState.inventory.fill(null);
             gameState.inventory[0] = { type: 'stone', count: 1, icon: '🪨' };
             gameState.inventory[1] = { type: 'torch', count: 1, icon: '🔥' };
             gameState.selectedSlot = 0;
-            if (gameState.isInventoryOpen) closeInventory();
-            const sp = randomBeachSpawn();
-            camera.position.set(sp.x, getTerrainHeight(sp.x, sp.z) + 2.5, sp.z);
-            // Порядок углов должен быть 'YXZ' (как в PointerLockControls), иначе от старого наклона остаётся крен
-            camera.quaternion.setFromEuler(new THREE.Euler(0, -sp.angle - Math.PI / 2, 0, 'YXZ'));
+            if (bag) {
+                camera.position.set(bag.x, bag.y + 2.6, bag.z);
+                camera.quaternion.setFromEuler(new THREE.Euler(0, bag.rot, 0, 'YXZ'));
+            } else {
+                const sp = randomBeachSpawn();
+                camera.position.set(sp.x, getTerrainHeight(sp.x, sp.z) + 2.5, sp.z);
+                // Порядок углов должен быть 'YXZ' (как в PointerLockControls), иначе от старого наклона остаётся крен
+                camera.quaternion.setFromEuler(new THREE.Euler(0, -sp.angle - Math.PI / 2, 0, 'YXZ'));
+            }
             velY = 0; canJump = false;
             keys.w = keys.a = keys.s = keys.d = false;
             playerState.hp = MAX_HP; playerState.lastHurtAt = 0;
             playerState.invulnUntil = performance.now() + RESPAWN_PROTECT_MS;
             spawnSeq++; // метка «телепорт»: остальные мгновенно переставят нашу модель, а не будут «возить» её по карте
             lastSent = null; lastSentAt = 0; // сразу сообщить всем, где мы возродились
+            netSend({ t: 'respawned' });
+            closeMap();
             updateUI(); updateHpUI();
-
-            deathMsgEl.style.opacity = '1';
-            clearTimeout(deathTimer);
-            deathTimer = setTimeout(() => { deathMsgEl.style.opacity = '0'; }, 2200);
+            controls.lock();
+            setTimeout(() => { if (!controls.isLocked && !dead && entered) showPause(); }, 700); // если браузер не дал захватить мышь — покажем паузу с кнопкой «Продолжить»
         }
+        deathBtn.addEventListener('click', () => respawnAt(null));
+        mapCanvas.addEventListener('click', (e) => { // на карте смерти — клик по своему спальнику
+            if (!dead) return;
+            const r = mapCanvas.getBoundingClientRect();
+            const cx = (e.clientX - r.left) * MAP_FULL / r.width, cy = (e.clientY - r.top) * MAP_FULL / r.height;
+            let best = null, bd = 22;
+            sleepbags.forEach(b => { if (b.owner !== myId) return; const d = Math.hypot(mapPx(b.x) - cx, mapPx(b.z) - cy); if (d < bd) { bd = d; best = b; } });
+            if (best) respawnAt(best);
+        });
 
         // ---------- удар по другому игроку ----------
         function tryHitPlayer(item, blockDist) {
@@ -4026,6 +4168,7 @@
                     (msg.doors || []).forEach(applyDoorSet);
                     (msg.cupboards || []).forEach(applyTcSet);
                     (msg.furnaces || []).forEach(applyFurnaceSet);
+                    (msg.sleepbags || []).forEach(applySleepbagSet);
                     (msg.stairs || []).forEach(applyStairSet);
                     updateOnlineCount();
                     break;
@@ -4053,6 +4196,7 @@
                 case 'bearhurt': { const b = bears.get(msg.id); if (b) { b.hp = msg.hp; b.hurt = 0.15; b.mesh.parts.forEach(q => q.material.emissive.setHex(0x992222)); } break; }
                 case 'bearkill': { const b = bears.get(msg.id); if (b) { spawnBlood(b.rx, getTerrainHeight(b.rx, b.rz) + 1.5, b.rz, 30); bearToCarcass(b, false); } break; }
                 case 'furnaceset': applyFurnaceSet(msg); break;
+                case 'sleepbagset': applySleepbagSet(msg); break;
                 case 'furnacestate': applyFurnaceState(msg); break;
                 case 'respawn': applyRespawn(msg); break;
                 case 'pong': if (typeof msg.ts === 'number') pingMs = Math.max(0, Math.round(performance.now() - msg.ts)); break;
@@ -4138,7 +4282,7 @@
                 case 'atk': { // удар по игроку: проверяем и передаём урон жертве
                     if (!p.state || typeof m.target !== 'string' || m.target === fromId) return;
                     const v = hostPlayers.get(m.target);
-                    if (!v || !v.state) return;
+                    if (!v || !v.state || v.dead) return;
                     const now = performance.now();
                     if (now - (p.lastAtk || 0) < 250) return; p.lastAtk = now;
                     const base = DAMAGE[p.state.item];
@@ -4165,10 +4309,15 @@
                     if (fromId !== myId && m.target !== myId) spawnBlood(bp.x, bp.y, bp.z, head ? 16 : 11);
                     break;
                 }
+                case 'respawned': { // игрок выбрал, где возродиться — снова живой
+                    const nowR = performance.now();
+                    p.dead = false; p.protUntil = nowR + RESPAWN_PROTECT_MS; p.hp = MAX_HP; p.hpAt = nowR; p.lastDied = nowR;
+                    break;
+                }
                 case 'died': { // игрок погиб — сразу рассылаем, не дожидаясь обычного обновления позиций
                     if (!p.state || !isNum(m.x, 2000) || !isNum(m.y, 500) || !isNum(m.z, 2000)) return;
                     const nowD = performance.now();
-                    if (nowD - (p.lastDied || 0) < 1000) return; p.lastDied = nowD;
+                    if (nowD - (p.lastDied || 0) < 1000) return; p.lastDied = nowD; p.dead = true;
                     if (fromId !== myId) remoteDied(fromId, m.x, m.y, m.z);
                     hostBroadcast({ t: 'died', id: fromId, x: m.x, y: m.y, z: m.z }, fromId);
                     break;
@@ -4209,6 +4358,11 @@
                         const groundOk = Math.abs(m.y - getTerrainHeight(m.x, m.z)) < 0.6 && ![...foundations.values()].some(f => Math.abs(m.x - f.x) <= 3.2 && Math.abs(m.z - f.z) <= 3.2);
                         const dup = [...furnaces.values(), ...cupboards.values()].some(t => Math.hypot(t.x - m.x, t.z - m.z) < 1.8 && Math.abs(t.y - m.y) < 1);
                         if ((fnd || groundOk) && !dup) hostAll({ t: 'furnaceset', id: 'u_' + (++foundationSeq) + '_' + Math.floor(Math.random() * 1e6), x: m.x, y: m.y, z: m.z, rot: isNum(m.rot, 10) ? m.rot : 0, wood: 0, cells: [], on: false, burn: 0, createdAt: Date.now(), cid });
+                    } else if (m.kind === 'sleepbag') {
+                        const fnd = [...foundations.values()].find(f => Math.abs(m.x - f.x) <= 2.2 && Math.abs(m.z - f.z) <= 2.2 && Math.abs(m.y - (f.y + 0.35)) < 0.3);
+                        const groundOk = Math.abs(m.y - getTerrainHeight(m.x, m.z)) < 0.6 && ![...foundations.values()].some(f => Math.abs(m.x - f.x) <= 3.2 && Math.abs(m.z - f.z) <= 3.2);
+                        const dup = [...sleepbags.values()].some(t => Math.hypot(t.x - m.x, t.z - m.z) < 1.4 && Math.abs(t.y - m.y) < 1) || [...furnaces.values(), ...cupboards.values()].some(t => Math.hypot(t.x - m.x, t.z - m.z) < 1.8 && Math.abs(t.y - m.y) < 1);
+                        if ((fnd || groundOk) && !dup) hostAll({ t: 'sleepbagset', id: 's_' + (++foundationSeq) + '_' + Math.floor(Math.random() * 1e6), x: m.x, y: m.y, z: m.z, rot: isNum(m.rot, 10) ? m.rot : 0, owner: fromId, createdAt: Date.now(), cid });
                     } else if (m.kind === 'stair') {
                         const fnd = [...foundations.values()].find(f => Math.abs(m.x - f.x) < 0.6 && Math.abs(m.z - f.z) < 0.6 && Math.abs(m.y - f.y) < 0.3);
                         const dup = [...stairs.values()].some(st => Math.hypot(st.x - m.x, st.z - m.z) < 0.6 && Math.abs(st.y - m.y) < 0.3);
@@ -4230,7 +4384,7 @@
                 }
                 case 'upgrade': { // улучшить в камень отдельную часть: фундамент, стену или крышу
                     const rec = typeof m.id === 'string' ? (pieceMaps()[m.kind] || new Map()).get(m.id) : null;
-                    if (rec && m.kind !== 'door' && m.kind !== 'cupboard' && m.kind !== 'furnace' && rec.material !== 'stone' && !tcBlocked(rec.x, rec.z, fromId)) hostAll({ t: 'pieceupg', kind: m.kind, id: rec.id, by: fromId });
+                    if (rec && m.kind !== 'door' && m.kind !== 'cupboard' && m.kind !== 'furnace' && m.kind !== 'sleepbag' && rec.material !== 'stone' && !tcBlocked(rec.x, rec.z, fromId)) hostAll({ t: 'pieceupg', kind: m.kind, id: rec.id, by: fromId });
                     break;
                 }
                 case 'demolish': { // разрушить — только если эта часть не старше 3 минут (проверяет хозяин)
@@ -4374,6 +4528,7 @@
                 cupboards: [...cupboards.values()].map(t => ({ id: t.id, x: t.x, y: t.y, z: t.z, rot: t.rot, wood: t.wood, stone: t.stone, registered: t.registered, createdAt: t.createdAt })),
                 furnaces: [...furnaces.values()].map(f => ({ id: f.id, x: f.x, y: f.y, z: f.z, rot: f.rot, wood: f.wood, cells: f.cells, on: f.on, burn: f.burn, createdAt: f.createdAt })),
                 stairs: [...stairs.values()].map(st => ({ id: st.id, x: st.x, y: st.y, z: st.z, rot: st.rot, material: st.material, createdAt: st.createdAt, hp: st.hp })),
+                sleepbags: [...sleepbags.values()].map(b => ({ id: b.id, x: b.x, y: b.y, z: b.z, rot: b.rot, owner: b.owner, createdAt: b.createdAt })),
                 spawned: [...resources.values()].filter(r => r.spawn && !r.gone).map(r => r.spawn)
             };
         }
@@ -4395,7 +4550,7 @@
         function cacheWorldLocally() {
             if (!USE_WS || !role || soloMode) return;
             const data = worldPayload(); delete data.cycle;
-            const empty = !data.destroyed.length && !data.foundations.length && !data.walls.length && !data.roofs.length && !data.doors.length && !data.cupboards.length && !data.furnaces.length && !data.stairs.length && !data.bags.length;
+            const empty = !data.destroyed.length && !data.foundations.length && !data.walls.length && !data.roofs.length && !data.doors.length && !data.cupboards.length && !data.furnaces.length && !data.stairs.length && !(data.sleepbags || []).length && !data.bags.length;
             if (empty) return; // пустой мир копией не затираем
             const json = JSON.stringify(data);
             const nowMs = Date.now();
@@ -4423,7 +4578,7 @@
                     // Новичку: его id, кто уже в игре, что уже срублено
                     conn.send({
                         t: 'welcome', id: pid,
-                        players: [...hostPlayers].filter(([id2, q]) => id2 !== pid && q.state).map(([id2, q]) => ({ id: id2, ...q.state })),
+                        players: [...hostPlayers].filter(([id2, q]) => id2 !== pid && q.state && !q.dead).map(([id2, q]) => ({ id: id2, ...q.state })),
                         ...worldPayload()
                     });
                 });
@@ -4600,7 +4755,7 @@
 
         // Отправка своего состояния (вызывается каждый кадр, реально шлёт не чаще SEND_INTERVAL_MS)
         function netTick(now) {
-            if (!entered || !role) return;
+            if (!entered || !role || dead) return;
             if (role === 'client' && !(hostConn && hostConn.open)) return;
             if (now - lastSentAt < SEND_INTERVAL_MS) return;
             _netEuler.setFromQuaternion(camera.quaternion, 'YXZ');
@@ -4633,7 +4788,7 @@
             const k = 1 - Math.exp(-14 * dt);
             for (const rp of remotePlayers.values()) {
                 if (rp.dead) {
-                    if (performance.now() - rp.deadAt < 3000) continue; // ждём новую позицию после возрождения
+                    if (performance.now() - rp.deadAt < 600000) continue; // тело не показываем, пока игрок выбирает место возрождения; вернётся с новой позицией
                     rp.dead = false; rp.model.visible = true;          // запасной выход, если она не пришла
                 }
                 const m = rp.model;
