@@ -109,9 +109,19 @@
         .crafting-req { font-size: 13px; opacity: 0.7; }
         #main-menu { 
             position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; 
-            background: rgba(10, 15, 10, 0.85); display: flex; flex-direction: column; 
+            background: linear-gradient(180deg, #3f9be0 0%, #78c3f2 55%, #c4e9ff 100%); display: flex; flex-direction: column; 
             align-items: center; justify-content: center; color: white; z-index: 200; 
         }
+        #menu-main { display: flex; flex-direction: column; align-items: center; justify-content: center; width: 100%; height: 100%; }
+        #menu-title { font-size: clamp(28px, 5.5vw, 52px); margin: 0 0 4px 0; text-shadow: 0 3px 12px rgba(0,40,90,0.45); text-align: center; }
+        #menu-char { width: min(320px, 60vw); height: min(400px, 44vh); cursor: grab; touch-action: none; }
+        #menu-char:active { cursor: grabbing; }
+        #menu-hint-keys { opacity: 0.85; margin-top: 14px; font-size: 13px; text-align: center; max-width: 90vw; text-shadow: 0 1px 4px rgba(0,40,90,0.5); }
+        #server-panel { display: none; width: min(380px, 90vw); background: rgba(0,0,0,0.42); }
+        #server-panel .crafting-list { max-height: 50vh; }
+        #server-hint { font-size: 13px; opacity: 0.8; text-align: center; margin-top: 10px; min-height: 16px; }
+        .menu-back { margin-top: 12px; padding: 10px; font-size: 16px; background: rgba(255,255,255,0.16); color: #fff; border: 2px solid rgba(255,255,255,0.3); border-radius: 10px; cursor: pointer; }
+        .menu-back:hover { background: rgba(255,255,255,0.28); }
         #play-btn { 
             padding: 15px 50px; font-size: 26px; background: #00b894; color: white; 
             border: none; cursor: pointer; border-radius: 12px; font-weight: bold; 
@@ -204,16 +214,21 @@
 <body class="relative">
 
     <div id="main-menu">
-        <h1 style="font-size: 48px; margin-bottom: 10px;">Прогулка по природе 🌲</h1>
-        <input id="nick-input" type="text" maxlength="15" placeholder="Твой ник (до 15 символов)" autocomplete="off" spellcheck="false"
-               style="width:300px;max-width:84vw;padding:12px 16px;margin-bottom:8px;font-size:20px;text-align:center;color:#fff;background:rgba(255,255,255,0.1);border:2px solid rgba(255,255,255,0.3);border-radius:10px;outline:none;user-select:text;">
-        <div id="nick-err" style="display:none;color:#ff8a80;font-size:14px;margin-bottom:8px;">Введи ник, чтобы зайти в игру</div>
-        <div id="world-box" style="display:none;margin-bottom:8px;">
-            <select id="world-select" style="width:300px;max-width:84vw;padding:10px 12px;font-size:17px;color:#fff;background:rgba(0,0,0,0.55);border:2px solid rgba(255,255,255,0.3);border-radius:10px;outline:none;"></select>
-            <div id="world-hint" style="font-size:13px;opacity:.7;margin-top:4px;min-height:16px;"></div>
+        <div id="menu-main">
+            <h1 id="menu-title">Прогулка по природе 🌲</h1>
+            <canvas id="menu-char" width="320" height="400"></canvas>
+            <input id="nick-input" type="text" maxlength="15" placeholder="Твой ник (до 15 символов)" autocomplete="off" spellcheck="false"
+                   style="width:300px;max-width:84vw;padding:11px 16px;margin-top:4px;margin-bottom:6px;font-size:19px;text-align:center;color:#fff;background:rgba(0,40,90,0.35);border:2px solid rgba(255,255,255,0.55);border-radius:10px;outline:none;user-select:text;">
+            <div id="nick-err" style="display:none;color:#ffe0dc;background:rgba(190,40,30,0.7);padding:3px 10px;border-radius:6px;font-size:14px;margin-bottom:6px;">Введи ник, чтобы зайти в игру</div>
+            <button id="play-btn" style="margin-top:6px;">ИГРАТЬ</button>
+            <p id="menu-hint-keys">WASD - Ходьба | Tab - Инвентарь | E (У) - Сумка | ЛКМ - Удар/Рубка | 1-5 - Слоты | G - Карта</p>
         </div>
-        <button id="play-btn" style="margin-top:8px;">ИГРАТЬ</button>
-        <p style="opacity: 0.7; margin-top: 20px;">WASD - Ходьба | Tab - Инвентарь | E (У) - Сумка | ЛКМ - Удар/Рубка | 1-5 - Слоты</p>
+        <div class="crafting-panel" id="server-panel">
+            <div class="crafting-title">Серверы</div>
+            <div class="crafting-list" id="server-list"></div>
+            <div id="server-hint"></div>
+            <button class="menu-back" id="server-back">← Назад</button>
+        </div>
     </div>
 
     <div id="pause-menu">
@@ -225,6 +240,7 @@
             <label class="pause-check"><input type="checkbox" id="pause-fps"> Показывать FPS</label>
             <label class="pause-check"><input type="checkbox" id="pause-ping"> Показывать пинг</label>
             <button class="pause-btn danger" id="pause-respawn">☠ Переродиться</button>
+            <button class="pause-btn gray" id="pause-leave">🚪 Выйти с сервера</button>
             <div id="pause-confirm">Ты уверен? Из тебя выпадет рюкзак, а ты возродишься на пляже.
                 <button class="pause-btn danger" id="pause-yes">Да, переродиться</button>
                 <button class="pause-btn gray" id="pause-no">Отмена</button>
@@ -2931,20 +2947,22 @@
         let myNick = '';
         const nickInput = document.getElementById('nick-input'), nickErr = document.getElementById('nick-err');
         try { nickInput.value = cleanNick(localStorage.getItem('nw_nick')); } catch (e) {}
-        function startPlay() {
+        const mainMenuEl = document.getElementById('main-menu'), menuMainEl = document.getElementById('menu-main'), serverPanelEl = document.getElementById('server-panel');
+        function startPlay() { // кнопка ИГРАТЬ: проверяем ник и открываем список серверов
+            if (entered && role) { mainMenuEl.style.display = 'none'; controls.lock(); return; } // уже в игре (меню показалось после закрытия окна) — просто продолжаем
             const n = cleanNick(nickInput.value);
             if (!n) { nickErr.style.display = 'block'; nickInput.focus(); return; }
             nickErr.style.display = 'none';
             myNick = n; nickInput.value = n;
             try { localStorage.setItem('nw_nick', n); } catch (e) {}
             nickInput.blur();
-            if (USE_WS) { // подключаемся к игровому серверу только после выбора мира и ника
-                const wsel = document.getElementById('world-select');
-                if (wsel && wsel.value) worldId = wsel.value;
-                try { localStorage.setItem('nw_world', worldId); } catch (e) {}
-                if (!netWanted) startNetwork();
-            }
-            document.getElementById('main-menu').style.display = 'none';
+            if (USE_WS) openServerMenu(); else enterGame(null);
+        }
+        function enterGame(wid) { // выбрали сервер — подключаемся и входим в игру
+            if (wid) { worldId = wid; try { localStorage.setItem('nw_world', worldId); } catch (e) {} }
+            if (USE_WS && !netWanted) startNetwork();
+            mainMenuEl.style.display = 'none';
+            serverPanelEl.style.display = 'none'; menuMainEl.style.display = 'flex'; // при следующем показе меню — снова главный экран
             controls.lock();
         }
         document.getElementById('play-btn').onclick = startPlay;
@@ -4878,33 +4896,83 @@
             }
         }
 
-        // Меню выбора мира (только с игровым сервером): список приходит с сервера и обновляется; сам вход — после «ИГРАТЬ»
-        function initWorldMenu() {
-            const box = document.getElementById('world-box'), sel = document.getElementById('world-select'), hint = document.getElementById('world-hint');
-            box.style.display = 'block';
-            let chosen = worldId, loaded = false;
-            sel.addEventListener('change', () => { chosen = sel.value; });
-            async function refresh() {
-                if (document.getElementById('main-menu').style.display === 'none') return; // уже играем
-                try {
-                    const r = await fetch(SERVER_HTTP + '/worlds', { cache: 'no-store' });
-                    const list = await r.json();
-                    if (!Array.isArray(list) || !list.length) throw new Error('empty');
-                    sel.innerHTML = '';
-                    list.forEach(w => {
-                        const o = document.createElement('option');
-                        o.value = w.id; o.textContent = w.name + ' · ' + w.players + '/' + w.max;
-                        if (w.id === chosen) o.selected = true;
-                        sel.appendChild(o);
-                    });
-                    loaded = true; hint.textContent = '';
-                } catch (_) {
-                    if (!loaded) { hint.textContent = 'Сервер просыпается… (может занять до минуты)'; setTimeout(refresh, 3000); return; }
-                }
-                setTimeout(refresh, 15000);
-            }
-            refresh();
+        // ---------- главный экран: человечек, которого можно покрутить ----------
+        const menuCanvas = document.getElementById('menu-char');
+        const menuRenderer = new THREE.WebGLRenderer({ canvas: menuCanvas, antialias: true, alpha: true });
+        menuRenderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+        const menuScene = new THREE.Scene();
+        menuScene.add(new THREE.AmbientLight(0xffffff, 0.95));
+        const menuSun = new THREE.DirectionalLight(0xffffff, 1.4); menuSun.position.set(3, 6, 8); menuScene.add(menuSun);
+        const menuCam = new THREE.PerspectiveCamera(30, 0.8, 0.1, 60);
+        menuCam.position.set(0, 1.9, 9.5); menuCam.lookAt(0, 1.55, 0);
+        const menuModel = createPlayerModel();
+        menuScene.add(menuModel);
+        let menuYaw = -0.5, menuDragging = false, menuLastT = performance.now(), menuSizeKey = '';
+        menuCanvas.addEventListener('pointerdown', (e) => { menuDragging = true; menuCanvas.setPointerCapture(e.pointerId); });
+        menuCanvas.addEventListener('pointermove', (e) => { if (menuDragging) menuYaw += (e.movementX || 0) * 0.013; });
+        const menuStop = () => { menuDragging = false; };
+        menuCanvas.addEventListener('pointerup', menuStop); menuCanvas.addEventListener('pointercancel', menuStop);
+        (function menuLoop(t) {
+            requestAnimationFrame(menuLoop);
+            const dt = Math.min(0.05, (t - menuLastT) / 1000); menuLastT = t;
+            if (mainMenuEl.style.display === 'none' || menuMainEl.style.display === 'none') return;
+            const w = menuCanvas.clientWidth, h = menuCanvas.clientHeight;
+            if (w < 10 || h < 10) return;
+            const key = w + 'x' + h;
+            if (key !== menuSizeKey) { menuSizeKey = key; menuRenderer.setSize(w, h, false); menuCam.aspect = w / h; menuCam.updateProjectionMatrix(); }
+            if (!menuDragging) menuYaw += dt * 0.35; // сам медленно поворачивается, пока не трогаешь
+            updateAvatarAnimation(menuModel, dt, false, 0, 1);
+            menuModel.rotation.y = menuYaw;
+            menuRenderer.render(menuScene, menuCam);
+        })(performance.now());
+
+        // ---------- список серверов (только с игровым сервером): карточки как в крафтах — название и онлайн ----------
+        let serverList = null;
+        const serverListEl = document.getElementById('server-list'), serverHintEl = document.getElementById('server-hint');
+        function renderServers() {
+            serverListEl.innerHTML = '';
+            if (!serverList) { serverHintEl.textContent = 'Сервер просыпается… (может занять до минуты)'; return; }
+            serverHintEl.textContent = '';
+            serverList.forEach(w => {
+                const card = document.createElement('div'); card.className = 'crafting-slot';
+                const ic = document.createElement('div'); ic.className = 'crafting-icon'; ic.textContent = '🌍';
+                const info = document.createElement('div'); info.className = 'crafting-info';
+                const nm = document.createElement('div'); nm.className = 'crafting-name'; nm.textContent = String(w.name);
+                const on = document.createElement('div'); on.className = 'crafting-req'; on.textContent = 'Онлайн: ' + w.players + '/' + w.max;
+                info.append(nm, on); card.append(ic, info);
+                if (w.players >= w.max) card.classList.add('disabled');
+                card.onclick = () => enterGame(w.id);
+                serverListEl.appendChild(card);
+            });
         }
+        async function fetchServers() {
+            try {
+                const r = await fetch(SERVER_HTTP + '/worlds', { cache: 'no-store' });
+                const list = await r.json();
+                if (!Array.isArray(list) || !list.length) throw new Error('empty');
+                serverList = list;
+            } catch (_) {}
+            if (serverPanelEl.style.display !== 'none') renderServers();
+        }
+        function openServerMenu() {
+            menuMainEl.style.display = 'none'; serverPanelEl.style.display = 'flex';
+            renderServers(); fetchServers();
+        }
+        document.getElementById('server-back').onclick = () => { serverPanelEl.style.display = 'none'; menuMainEl.style.display = 'flex'; };
+        function initWorldMenu() { // загружаем список заранее (заодно будит спящий сервер) и обновляем, пока открыто меню
+            fetchServers();
+            setInterval(() => { if (mainMenuEl.style.display !== 'none') fetchServers(); }, 5000);
+        }
+
+        // ---------- выйти с сервера: сохраняем себя и мир, потом возвращаемся на главный экран ----------
+        function leaveServer() {
+            try { sendPlayerData(true); } catch (_) {}
+            try { saveWorldNow(peer); } catch (_) {}
+            try { cacheWorldLocally(); } catch (_) {}
+            try { if (peer) peer.destroy(); } catch (_) {}
+            setTimeout(() => location.reload(), 300);
+        }
+        document.getElementById('pause-leave').addEventListener('click', () => { document.getElementById('pause-leave').disabled = true; leaveServer(); });
         if (USE_WS) initWorldMenu(); else startNetwork();
 
         // --- DEV-ПАНЕЛЬ (встроим кнопки прямо здесь, т.к. HTML их содержит) ---
