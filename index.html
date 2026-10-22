@@ -4212,6 +4212,7 @@
             switch (msg.t) {
                 case 'welcome':
                     myId = msg.id;
+                    if (isNum(msg.cycle, 1e6)) cycleBase = Date.now() / 1000 - msg.cycle; // время суток общее для всех: берём у хозяина
                     (msg.spawned || []).forEach(applyRespawn);
                     (msg.destroyed || []).forEach(id => destroyResource(id));
                     Object.entries(msg.hits || {}).forEach(([id, h]) => applyRemoteHit(id, h, false));
@@ -4808,7 +4809,7 @@
         window.addEventListener('pagehide', () => { try { sendPlayerData(true); } catch (_) {} try { saveWorldNow(peer); } catch (_) {} try { if (peer) peer.destroy(); } catch (_) {} });
 
         // Начинаем показываться другим игрокам, как только нажали "ИГРАТЬ"
-        controls.addEventListener('lock', () => { entered = true; lastSentAt = 0; cycleBase = Date.now() / 1000 - MORNING_START; }); // заходим в игру — снова раннее утро
+        controls.addEventListener('lock', () => { entered = true; lastSentAt = 0; }); // (раньше тут каждый раз сбрасывалось время суток на утро — из-за этого ночь не наступала)
 
         // Отправка своего состояния (вызывается каждый кадр, реально шлёт не чаще SEND_INTERVAL_MS)
         function netTick(now) {
