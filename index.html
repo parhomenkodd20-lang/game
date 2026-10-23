@@ -200,6 +200,8 @@
         #pause-menu { position: fixed; inset: 0; z-index: 300; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.72); color: #fff; font-family: inherit; }
         .pause-card { width: 380px; max-width: 92vw; padding: 26px 28px; border-radius: 16px; background: rgba(28,32,36,0.96); border: 1px solid rgba(255,255,255,0.15); box-shadow: 0 10px 40px rgba(0,0,0,0.6); text-align: left; }
         .pause-card h2 { margin: 0 0 18px; text-align: center; }
+        #pause-gfx-labels { display: flex; justify-content: space-between; font-size: 12px; opacity: 0.85; margin: 2px 2px 12px; }
+        #pause-gfx-labels .gfx-soon { opacity: 0.35; }
         .pause-btn { display: block; width: 100%; padding: 11px 14px; margin: 8px 0; font-size: 16px; color: #fff; background: rgba(0,184,148,0.9); border: none; border-radius: 10px; cursor: pointer; }
         .pause-btn:hover { background: rgba(0,206,166,1); }
         .pause-btn.danger { background: rgba(192,57,43,0.92); }
@@ -254,6 +256,9 @@
         <div class="pause-card">
             <h2>⏸ Пауза</h2>
             <button class="pause-btn" id="pause-resume">Продолжить</button>
+            <div class="pause-row">Графика: <b id="pause-gfx-val">Средняя</b></div>
+            <input type="range" id="pause-gfx" min="1" max="4" step="1" value="2" style="width:100%;">
+            <div id="pause-gfx-labels"><span>Низкая</span><span>Средняя</span><span>Высокая</span><span class="gfx-soon">Ультра</span></div>
             <div class="pause-row">Дальность прорисовки: <b id="pause-dist-val">1000</b></div>
             <input type="range" id="pause-dist" min="100" max="1000" step="25" value="1000" style="width:100%;">
             <label class="pause-check"><input type="checkbox" id="pause-fps"> Показывать FPS</label>
@@ -684,6 +689,13 @@
         renderer.shadowMap.enabled = true;
         document.body.appendChild(renderer.domElement);
 
+        // Пресеты графики (сохраняются на устройстве). 1 — для слабых ПК, 2 — как раньше, 3 — больше теней и красоты.
+        const GFX = {
+            1: { name: 'Низкая',  pr: 0.75, shadows: false, soft: false, follow: false, hemi: 0,    tone: false, grassCap: 700,  grassR: 32, grassDens: 0.18, maxDist: 300 },
+            2: { name: 'Средняя', pr: 1,    shadows: true,  soft: false, follow: false, hemi: 0,    tone: false, grassCap: 2600, grassR: 64, grassDens: 0.3,  maxDist: 1000 },
+            3: { name: 'Высокая', pr: Math.min(window.devicePixelRatio || 1, 2), shadows: true, soft: true, follow: true, hemi: 0.45, tone: true, grassCap: 4000, grassR: 80, grassDens: 0.5, maxDist: 1000 }
+        };
+        let gfx = GFX[2];
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
         scene.add(ambientLight);
         const skyLight = new THREE.DirectionalLight(0xfff5e6, 1.3);
@@ -691,6 +703,9 @@
         skyLight.castShadow = true;
         skyLight.shadow.camera.far = 500;
         scene.add(skyLight);
+        scene.add(skyLight.target); // цель света: на высокой графике двигается за игроком, чтобы тени были рядом с ним
+        const hemiLight = new THREE.HemisphereLight(0xbfdcff, 0x5a4a32, 0); // отражённый свет неба и земли — только на высокой графике
+        scene.add(hemiLight);
 
         // --- ВИЗУАЛЬНЫЕ СОЛНЦЕ И ЛУНА НА НЕБЕ ---
         function createCelestialBody(radius, coreColor, glowColor) {
@@ -748,7 +763,9 @@
             const celX = Math.sin(angle) * dist;
             const celY = Math.max(elevation, 0.03) * dist;
             const celZ = 140;
-            skyLight.position.set(celX, celY, celZ);
+            const gfxFx = gfx.follow ? Math.round(camera.position.x / 2) * 2 : 0, gfxFz = gfx.follow ? Math.round(camera.position.z / 2) * 2 : 0; // шаг 2 м, чтобы тени не дрожали
+            skyLight.target.position.set(gfxFx, 0, gfxFz);
+            skyLight.position.set(gfxFx + celX, celY, gfxFz + celZ);
 
             tmpDir.set(celX, celY, celZ).normalize();
             const bodyPos = tmpDir.multiplyScalar(420).add(camera.position);
@@ -781,6 +798,7 @@
                 ambientLight.intensity = THREE.MathUtils.lerp(0.012, 0.045, elevation); // ночь заметно темнее
                 tmpSkyColor.copy(SKY_NIGHT);
             }
+            hemiLight.intensity = gfx.hemi * (ambientLight.intensity / 0.6); // отражённый свет гаснет вместе с дневным
             scene.background = tmpSkyColor.clone();
             scene.fog.color.copy(tmpSkyColor);
         }
@@ -2340,7 +2358,7 @@
 
 
         // ---------- трава: тёмно-зелёные и сухие пучки вокруг игрока (как на референсе), пересчитывается при ходьбе ----------
-        const GRASS_MAX = 2600, GRASS_CELL = 4; // травинки растут поодиночке или по две, разбросаны по полю (как на референсе)
+        const GRASS_MAX = 4000, GRASS_CELL = 4; // травинки растут поодиночке или по две, разбросаны по полю (как на референсе)
         let grassRadius = 64, grassCX = 1e9, grassCZ = 1e9, grassFoundCount = -1, grassRadLast = 0;
         const grassGeo = (() => {
             const g = new THREE.BufferGeometry(); // два перекрещённых вертикальных прямоугольника
@@ -2367,11 +2385,11 @@
             const j0 = Math.floor((pz - R) / GRASS_CELL) - 1, j1 = Math.floor((pz + R) / GRASS_CELL) + 1;
             outer:
             for (let ix = i0; ix <= i1; ix++) for (let iz = j0; iz <= j1; iz++) {
-                if (grassHash(ix, iz, 1) > 0.3) continue; // клеток с травой больше, но в каждой всего 1–2 травинки
+                if (grassHash(ix, iz, 1) > gfx.grassDens) continue; // клеток с травой больше, но в каждой всего 1–2 травинки
                 const cx = (ix + grassHash(ix, iz, 2)) * GRASS_CELL, cz = (iz + grassHash(ix, iz, 3)) * GRASS_CELL;
                 const count = 1 + Math.floor(grassHash(ix, iz, 4) * 2); // 1 или 2 травинки
                 for (let k = 0; k < count; k++) {
-                    if (n >= GRASS_MAX) break outer;
+                    if (n >= Math.min(GRASS_MAX, gfx.grassCap)) break outer;
                     const x = cx + (grassHash(ix, iz, 10 + k * 5) - 0.5) * 2.4, z = cz + (grassHash(ix, iz, 11 + k * 5) - 0.5) * 2.4;
                     const d = Math.hypot(x - px, z - pz); if (d > R) continue;
                     if (Math.hypot(x, z) > BEACH_START - 4) continue;                       // на песке травы нет
@@ -3309,14 +3327,47 @@
         });
 
         // ---------- настройки: дальность прорисовки, FPS, пинг ----------
-        const settings = { dist: 1000, fps: false, ping: false };
-        try { const j = JSON.parse(sessionStorage.getItem('game_settings') || '{}'); if (typeof j.dist === 'number') settings.dist = THREE.MathUtils.clamp(j.dist, 100, 1000); settings.fps = !!j.fps; settings.ping = !!j.ping; } catch (e) {}
-        const saveSettings = () => { try { sessionStorage.setItem('game_settings', JSON.stringify(settings)); } catch (e) {} };
+        // Все настройки (кроме админских) хранятся в самом браузере — привязаны к устройству, а не к аккаунту
+        const settings = { dist: 1000, fps: false, ping: false, gfx: 2 };
+        try {
+            const j = JSON.parse(localStorage.getItem('nw_settings') || sessionStorage.getItem('game_settings') || '{}');
+            if (typeof j.dist === 'number') settings.dist = THREE.MathUtils.clamp(j.dist, 100, 1000);
+            settings.fps = !!j.fps; settings.ping = !!j.ping;
+            if (j.gfx === 1 || j.gfx === 2 || j.gfx === 3) settings.gfx = j.gfx;
+        } catch (e) {}
+        const saveSettings = () => { try { localStorage.setItem('nw_settings', JSON.stringify(settings)); } catch (e) {} };
         function applyDrawDistance() {
-            camera.far = settings.dist; camera.updateProjectionMatrix();
-            scene.fog.density = Math.max(0.0028, 2.4 / settings.dist); // туман скрывает край прорисовки
-            grassRadius = Math.min(64, settings.dist * 0.4);
+            const d = Math.min(settings.dist, gfx.maxDist); // на низкой графике дальше 300 м не рисуем
+            camera.far = d; camera.updateProjectionMatrix();
+            scene.fog.density = Math.max(0.0028, 2.4 / d); // туман скрывает край прорисовки
+            grassRadius = Math.min(gfx.grassR, d * 0.4);
         }
+        function applyGraphics(level) {
+            gfx = GFX[level] || GFX[2];
+            renderer.setPixelRatio(gfx.pr); renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = gfx.shadows; skyLight.castShadow = gfx.shadows;
+            renderer.shadowMap.type = gfx.soft ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+            const sh = skyLight.shadow;
+            if (gfx.follow) { // тени вокруг игрока: большая карта теней, мягкие края
+                sh.camera.left = -70; sh.camera.right = 70; sh.camera.top = 70; sh.camera.bottom = -70; sh.camera.near = 1; sh.camera.far = 900;
+                sh.mapSize.set(2048, 2048); sh.bias = -0.0006; sh.normalBias = 0.05;
+            } else { // как было раньше
+                sh.camera.left = -5; sh.camera.right = 5; sh.camera.top = 5; sh.camera.bottom = -5; sh.camera.near = 0.5; sh.camera.far = 500;
+                sh.mapSize.set(512, 512); sh.bias = 0; sh.normalBias = 0;
+            }
+            sh.camera.updateProjectionMatrix();
+            if (sh.map) { sh.map.dispose(); sh.map = null; }
+            renderer.toneMapping = gfx.tone ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping; renderer.toneMappingExposure = 1.15;
+            scene.traverse(o => { if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => { m.needsUpdate = true; }); }); // материалам нужно пересчитаться под новые тени и тонкую настройку цвета
+            if (!gfx.follow) hemiLight.intensity = 0;
+            applyDrawDistance(); grassCX = 1e9; // трава перерисуется по новым настройкам
+            markShadowReceivers();
+        }
+        function markShadowReceivers() { // на высокой графике постройки, деревья и игроки не только отбрасывают, но и принимают тени
+            if (!gfx.follow) return;
+            scene.traverse(o => { if (o.isMesh && o.castShadow && !o.receiveShadow && !o.isInstancedMesh) o.receiveShadow = true; });
+        }
+        setInterval(markShadowReceivers, 3000);
         let pingMs = null;
         const perfEl = document.createElement('div');
         perfEl.style.cssText = 'position:fixed;left:12px;bottom:12px;z-index:150;padding:5px 10px;border-radius:8px;background:rgba(0,0,0,0.5);color:#fff;font:600 13px monospace;line-height:1.5;display:none;pointer-events:none;';
@@ -3337,7 +3388,18 @@
         const distInput = document.getElementById('pause-dist'), distVal = document.getElementById('pause-dist-val');
         const fpsBox = document.getElementById('pause-fps'), pingBox = document.getElementById('pause-ping');
         distInput.value = settings.dist; distVal.textContent = settings.dist; fpsBox.checked = settings.fps; pingBox.checked = settings.ping;
-        applyDrawDistance(); // счётчики FPS/пинга обновит perfLoop (role объявлен ниже по файлу)
+        const gfxInput = document.getElementById('pause-gfx'), gfxVal = document.getElementById('pause-gfx-val');
+        gfxInput.value = settings.gfx; gfxVal.textContent = GFX[settings.gfx].name;
+        gfxInput.addEventListener('input', () => {
+            const v = parseInt(gfxInput.value, 10);
+            if (v === 4) { // «Ультра» пока не готова: показываем, но не включаем
+                gfxInput.value = settings.gfx; gfxVal.textContent = 'Ультра — скоро';
+                setTimeout(() => { gfxVal.textContent = GFX[settings.gfx].name; }, 1500);
+                return;
+            }
+            settings.gfx = v; gfxVal.textContent = GFX[v].name; applyGraphics(v); saveSettings();
+        });
+        applyGraphics(settings.gfx); // тени, разрешение, трава и дальность по сохранённой графике (счётчики FPS/пинга обновит perfLoop)
         distInput.addEventListener('input', () => { settings.dist = parseInt(distInput.value, 10); distVal.textContent = settings.dist; applyDrawDistance(); saveSettings(); });
         fpsBox.addEventListener('change', () => { settings.fps = fpsBox.checked; saveSettings(); refreshPerf(); });
         pingBox.addEventListener('change', () => { settings.ping = pingBox.checked; saveSettings(); refreshPerf(); });
