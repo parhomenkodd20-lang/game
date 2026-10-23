@@ -3000,7 +3000,7 @@
             document.getElementById('menu-account').style.display = account && USE_WS ? 'flex' : 'none';
             document.getElementById('acc-label').textContent = account ? '👤 ' + account.name : '';
             if (!account) {
-                try { const msg = sessionStorage.getItem('nw_accmsg'); if (msg) { accErrEl.textContent = msg; sessionStorage.removeItem('nw_accmsg'); } } catch (e) {}
+                try { const msg = sessionStorage.getItem('nw_accmsg'); if (msg) { accErrEl.textContent = msg; sessionStorage.removeItem('nw_accmsg'); const ln = localStorage.getItem('nw_lastname'); if (ln) accNameEl.value = ln; setAccMode('register'); accErrEl.textContent = msg; } } catch (e) {}
                 setTimeout(() => { try { accNameEl.focus(); } catch (e) {} }, 50);
             }
         }
@@ -4771,8 +4771,9 @@
         const FATAL_NET = ['replaced', 'full', 'no-world', 'bad-token', 'no-account'];
         function fatalNetError(type) {
             if (type === 'no-account') { // сервер не знает этот аккаунт (например, база сервера обнулилась): просим войти заново
-                try { sessionStorage.setItem('nw_accmsg', 'Сервер не нашёл твой аккаунт. Войди заново или создай новый.'); } catch (e) {}
-                accountLogout(); location.reload(); return;
+                try { sessionStorage.setItem('nw_accmsg', 'Сервер забыл твой аккаунт (он перезапускался). Введи то же имя и пароль и нажми «Создать аккаунт» — вернёшься в свой мир.'); } catch (e) {}
+                try { localStorage.setItem('nw_lastname', account ? account.name : ''); localStorage.removeItem('nw_acc'); } catch (e) {} // токен оставляем: введёшь тот же пароль — вернёшься в свой мир со своими постройками
+                location.reload(); return;
             }
             restarting = true; netGen++;
             teardownNetwork();

@@ -25,7 +25,8 @@ const TICK_MS = 50;              // как часто рассылаем поз�
 const MAX_FRAME = 4 * 1024 * 1024; // самое большое сообщение (сохранение мира от хозяина)
 const MAX_PLAYER_MSG = 32 * 1024;  // обычный игрок не может слать больше
 const MAX_SAVE_BYTES = 3 * 1024 * 1024;
-const SAVE_DELAY_MS = 5000;
+const SAVE_DELAY_MS = 30000;      // как часто пишем мир в хранилище (бесплатная база Upstash ограничена по числу запросов, поэтому не чаще)
+const PLAYER_SAVE_DELAY_MS = 60000;
 const PLAYER_KEEP_MS = 30 * 24 * 3600 * 1000; // данные игрока, который не заходил 30 дней, стираем
 const MAX_PLAYER_RECORDS = 3000;
 const HELD_ITEMS = ['stone', 'pickaxe', 'axe', 'mallet', 'torch', 'chertyozh', 'spear'];
@@ -81,7 +82,7 @@ async function persistNow(w) {
 function schedulePersistPlayers(w) {
     w.pDirty = true;
     if (w.pTimer) return;
-    w.pTimer = setTimeout(() => { w.pTimer = null; persistPlayers(w); }, SAVE_DELAY_MS);
+    w.pTimer = setTimeout(() => { w.pTimer = null; persistPlayers(w); }, PLAYER_SAVE_DELAY_MS);
 }
 async function persistPlayers(w) {
     if (!w.pDirty) return;
@@ -407,7 +408,11 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify(list)); return;
     }
     if (req.method === 'POST' && (url === '/register' || url === '/login')) { handleAuth(req, res, url.slice(1)); return; }
-    if (url === '/health') { res.writeHead(200, CORS); res.end('ok'); return; }
+    if (url === '/health') { // по этому адресу видно, где сервер хранит данные
+        res.writeHead(200, { ...CORS, 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('ok\nхранилище: ' + ((UPSTASH_URL && UPSTASH_TOKEN) ? 'Upstash (данные переживут перезапуск)' : 'ТОЛЬКО ФАЙЛ — при перезапуске Render данные и аккаунты СТИРАЮТСЯ') + '\nаккаунтов: ' + accByName.size);
+        return;
+    }
     if (url === '/' || url === '/index.html') {
         const f = [path.join(__dirname, 'index.html'), path.join(__dirname, 'public', 'index.html')].find(x => fs.existsSync(x));
         if (f) { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); fs.createReadStream(f).pipe(res); return; }
@@ -433,6 +438,7 @@ const SELF_URL = (process.env.RENDER_EXTERNAL_URL || '').replace(/\/$/, '');
 if (SELF_URL) setInterval(() => { fetch(SELF_URL + '/health').catch(() => {}); }, 10 * 60 * 1000);
 
 async function main() {
+    if (!(UPSTASH_URL && UPSTASH_TOKEN)) console.warn('ВНИМАНИЕ: Upstash не подключён — аккаунты и мир хранятся в файле и пропадут при перезапуске сервера на Render!');
     for (const w of worlds.values()) {
         if (w === [...worlds.values()][0]) await loadAccounts();
         w.saved = await store.load(w.id);
