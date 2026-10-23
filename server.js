@@ -427,6 +427,11 @@ setInterval(() => {
     console.log([...worlds.values()].map(w => w.id + ':' + w.players.size).join(' ') + ' · память ' + Math.round(process.memoryUsage().rss / 1048576) + ' МБ');
 }, 60000);
 
+// Бесплатный Render усыпляет сервер после 15 минут без запросов, а просыпается он до минуты — отсюда «переподключение».
+// Поэтому раз в 10 минут сервер сам стучится на свой публичный адрес (Render сам подставляет RENDER_EXTERNAL_URL) и не засыпает.
+const SELF_URL = (process.env.RENDER_EXTERNAL_URL || '').replace(/\/$/, '');
+if (SELF_URL) setInterval(() => { fetch(SELF_URL + '/health').catch(() => {}); }, 10 * 60 * 1000);
+
 async function main() {
     for (const w of worlds.values()) {
         if (w === [...worlds.values()][0]) await loadAccounts();
