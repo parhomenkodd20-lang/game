@@ -543,6 +543,9 @@
             updateUI();
         }
 
+        const adm = { free: false, noclip: false, god: false }; // переключатели админ-панели (см. ниже)
+        function costHave(type) { return adm.free ? 1e6 : countItemInInventory(type); }   // «хватает ли?» — при бесплатном режиме всегда да
+        function costSpend(type, n) { if (!adm.free) removeFromInventory(type, n); }      // и ничего не списываем
         function countItemInInventory(type) {
             let total = 0;
             for (let i = 0; i < gameState.inventory.length; i++) {
@@ -576,10 +579,10 @@
             const recipe = RECIPES.find(r => r.id === recipeId);
             if (!recipe) return;
             for (let [type, amount] of Object.entries(recipe.ingredients)) {
-                if (countItemInInventory(type) < amount) return;
+                if (costHave(type) < amount) return;
             }
             for (let [type, amount] of Object.entries(recipe.ingredients)) {
-                removeFromInventory(type, amount);
+                costSpend(type, amount);
             }
             addToInventory(recipe.result.type, recipe.result.count);
         }
@@ -619,7 +622,7 @@
                 const slot = document.createElement('div');
                 slot.className = 'crafting-slot';
                 const canCraft = Object.entries(recipe.ingredients).every(
-                    ([type, amount]) => countItemInInventory(type) >= amount
+                    ([type, amount]) => costHave(type) >= amount
                 );
                 if (!canCraft) slot.classList.add('disabled');
                 slot.innerHTML = `
@@ -1100,7 +1103,7 @@
             else if (m.kind === 'wall') { setBuildingMat(rec.mesh, wallStoneMat); bricksDirty = true; }
             else if (m.kind === 'roof') setBuildingMat(rec.mesh, roofStoneMat);
             else if (m.kind === 'stair') setStairStone(rec.mesh);
-            if (m.by && m.by === myId) { removeFromInventory('stone_material', UPGRADE_STONE_COST); updateUI(); }
+            if (m.by && m.by === myId) { costSpend('stone_material', UPGRADE_STONE_COST); updateUI(); }
         }
         function applyPieceDelete(m) {
             bricksDirty = true;
@@ -1776,7 +1779,7 @@
         function placeSleepbag() {
             if (!ghostPlace || ghostPlace.kind !== 'sleepbag' || !ghostValid || gameState.attackCooldown > 0) return false;
             gameState.attackCooldown = 0.35;
-            removeFromInventory('sleepbag', 1); updateUI();
+            costSpend('sleepbag', 1); updateUI();
             const cid = 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
             netSend({ t: 'build', kind: 'sleepbag', x: ghostPlace.x, y: ghostPlace.y, z: ghostPlace.z, rot: ghostPlace.rot, cid });
             return true;
@@ -1823,7 +1826,7 @@
         function placeFurnace() {
             if (!ghostPlace || ghostPlace.kind !== 'furnace' || !ghostValid || gameState.attackCooldown > 0) return false;
             gameState.attackCooldown = 0.35;
-            removeFromInventory('furnace', 1); updateUI();
+            costSpend('furnace', 1); updateUI();
             const cid = 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
             netSend({ t: 'build', kind: 'furnace', x: ghostPlace.x, y: ghostPlace.y, z: ghostPlace.z, rot: ghostPlace.rot, cid });
             return true;
@@ -1980,7 +1983,7 @@
             return null;
         }
         function hostHurtPlayer(pid, dmg) { // урон игроку от хозяина (так же, как удар другого игрока)
-            const v = hostPlayers.get(pid); if (!v || v.dead) return false;
+            const v = hostPlayers.get(pid); if (!v || v.dead || v.god) return false;
             const b = pid === myId ? { x: camera.position.x, y: camera.position.y, z: camera.position.z } : v.state;
             if (!b) return false;
             const now = performance.now();
@@ -2577,10 +2580,10 @@
                 layoutFoundationBeams(foundationGhost, foundationGhost.position.y, foundationGhost.position.x, foundationGhost.position.z);
                 const dupe = [...foundations.values()].some(f => Math.hypot(f.x - snapX, f.z - snapZ) < 0.6 && Math.abs(f.y - y) < 0.3);
                 const inBounds = Math.hypot(snapX, snapZ) < WATER_BOUNDARY_RADIUS;
-                ghostValid = !dupe && inBounds && countItemInInventory('wood') >= FOUNDATION_COST;
+                ghostValid = !dupe && inBounds && costHave('wood') >= FOUNDATION_COST;
                 setGhostMat(foundationGhost, ghostValid ? foundationGhostMat : foundationGhostBadMat);
                 ghostPlace = { kind: 'foundation', x: snapX, y, z: snapZ };
-                if (!ghostValid) reason = countItemInInventory('wood') < FOUNDATION_COST ? 'Не хватает дерева (нужно ' + FOUNDATION_COST + ')'
+                if (!ghostValid) reason = costHave('wood') < FOUNDATION_COST ? 'Не хватает дерева (нужно ' + FOUNDATION_COST + ')'
                     : dupe ? 'Тут уже стоит фундамент' : 'Слишком далеко от центра острова';
             } else if (buildMode === 'wall' || buildMode === 'door' || buildMode === 'window') {
                 const variant = buildMode === 'wall' ? 'plain' : buildMode;
@@ -2595,10 +2598,10 @@
                     smoothGhostTo(wallGhost, best.x, best.y - WALL_SINK, best.z, dt);
                     wallGhost.rotation.y = best.rot;
                     const dupe = hasWallNear(best.x, best.z, best.y);
-                    ghostValid = !dupe && countItemInInventory('wood') >= cost;
+                    ghostValid = !dupe && costHave('wood') >= cost;
                     setGhostMat(wallGhost, ghostValid ? foundationGhostMat : foundationGhostBadMat);
                     ghostPlace = { kind: 'wall', x: best.x, y: best.y, z: best.z, rot: best.rot, variant };
-                    if (!ghostValid) reason = countItemInInventory('wood') < cost ? 'Не хватает дерева (нужно ' + cost + ')' : 'Тут уже есть стена';
+                    if (!ghostValid) reason = costHave('wood') < cost ? 'Не хватает дерева (нужно ' + cost + ')' : 'Тут уже есть стена';
                 } else {
                     wallGhost.position.copy(rawPoint);
                     setGhostMat(wallGhost, foundationGhostBadMat);
@@ -2618,7 +2621,7 @@
                     const dupe = [...roofs.values()].some(r => Math.hypot(r.x - best.x, r.z - best.z) < 0.6 && Math.abs(r.y - y) < 0.3);
                     const supported = foundationEdges(best).some(e => hasWallNear(e.x, e.z, best.y));
                     const hasStair = [...stairs.values()].some(st => Math.hypot(st.x - best.x, st.z - best.z) < 0.6 && Math.abs(st.y - best.y) < 0.3);
-                    ghostValid = !dupe && supported && !hasStair && countItemInInventory('wood') >= cost;
+                    ghostValid = !dupe && supported && !hasStair && costHave('wood') >= cost;
                     roofGhost.material = ghostValid ? foundationGhostMat : foundationGhostBadMat;
                     ghostPlace = { kind: 'roof', x: best.x, y, z: best.z };
                     if (!ghostValid) reason = !supported ? 'Нужна хотя бы одна стена под крышей'
@@ -2643,7 +2646,7 @@
                     const dupe = [...stairs.values()].some(st => Math.hypot(st.x - best.x, st.z - best.z) < 0.6 && Math.abs(st.y - best.y) < 0.3);
                     const tcOn = [...cupboards.values()].some(t => Math.abs(t.x - best.x) <= 3 && Math.abs(t.z - best.z) <= 3 && Math.abs(t.y - (best.y + 0.35)) < 0.5);
                     const roofOn = [...roofs.values()].some(r => Math.hypot(r.x - best.x, r.z - best.z) < 0.6);
-                    ghostValid = !dupe && !tcOn && !roofOn && countItemInInventory('wood') >= STAIR_COST;
+                    ghostValid = !dupe && !tcOn && !roofOn && costHave('wood') >= STAIR_COST;
                     setGhostMat(stairGhost, ghostValid ? foundationGhostMat : foundationGhostBadMat);
                     ghostPlace = { kind: 'stair', x: best.x, y: best.y, z: best.z, rot };
                     if (!ghostValid) reason = dupe ? 'Тут уже стоит лестница' : tcOn ? 'На фундаменте стоит шкаф' : roofOn ? 'Под крышей лестницу не ставят' : 'Не хватает дерева (нужно ' + STAIR_COST + ')';
@@ -2726,7 +2729,7 @@
         function placeCupboard() {
             if (!ghostPlace || ghostPlace.kind !== 'cupboard' || !ghostValid || gameState.attackCooldown > 0) return false;
             gameState.attackCooldown = 0.35;
-            removeFromInventory('cupboard', 1); updateUI();
+            costSpend('cupboard', 1); updateUI();
             const cid = 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
             netSend({ t: 'build', kind: 'cupboard', x: ghostPlace.x, y: ghostPlace.y, z: ghostPlace.z, rot: ghostPlace.rot, cid });
             return true;
@@ -2735,7 +2738,7 @@
         function placeDoor() {
             if (!ghostPlace || ghostPlace.kind !== 'doorleaf' || !ghostValid || gameState.attackCooldown > 0) return false;
             gameState.attackCooldown = 0.35;
-            removeFromInventory('door', 1); updateUI();
+            costSpend('door', 1); updateUI();
             const cid = 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
             netSend({ t: 'build', kind: 'doorleaf', x: ghostPlace.x, y: ghostPlace.y, z: ghostPlace.z, rot: ghostPlace.rot, cid });
             return true;
@@ -2755,20 +2758,20 @@
             const cid = 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
             pendingBuilds.add(cid);
             if (ghostPlace.kind === 'foundation') {
-                removeFromInventory('wood', FOUNDATION_COST); updateUI();
+                costSpend('wood', FOUNDATION_COST); updateUI();
                 applyFoundationSet({ id: cid, x: ghostPlace.x, y: ghostPlace.y, z: ghostPlace.z });
                 netSend({ t: 'build', kind: 'foundation', x: ghostPlace.x, y: ghostPlace.y, z: ghostPlace.z, cid });
             } else if (ghostPlace.kind === 'wall') {
                 const cost = ghostPlace.variant === 'door' ? DOOR_COST : ghostPlace.variant === 'window' ? WINDOW_COST : WALL_COST;
-                removeFromInventory('wood', cost); updateUI();
+                costSpend('wood', cost); updateUI();
                 applyWallSet({ id: cid, x: ghostPlace.x, y: ghostPlace.y, z: ghostPlace.z, rot: ghostPlace.rot, variant: ghostPlace.variant });
                 netSend({ t: 'build', kind: 'wall', x: ghostPlace.x, y: ghostPlace.y, z: ghostPlace.z, rot: ghostPlace.rot, variant: ghostPlace.variant, cid });
             } else if (ghostPlace.kind === 'roof') {
-                removeFromInventory('wood', ROOF_COST); updateUI();
+                costSpend('wood', ROOF_COST); updateUI();
                 applyRoofSet({ id: cid, x: ghostPlace.x, y: ghostPlace.y, z: ghostPlace.z });
                 netSend({ t: 'build', kind: 'roof', x: ghostPlace.x, y: ghostPlace.y, z: ghostPlace.z, cid });
             } else if (ghostPlace.kind === 'stair') {
-                removeFromInventory('wood', STAIR_COST); updateUI();
+                costSpend('wood', STAIR_COST); updateUI();
                 applyStairSet({ id: cid, x: ghostPlace.x, y: ghostPlace.y, z: ghostPlace.z, rot: ghostPlace.rot });
                 netSend({ t: 'build', kind: 'stair', x: ghostPlace.x, y: ghostPlace.y, z: ghostPlace.z, rot: ghostPlace.rot, cid });
             }
@@ -3059,6 +3062,8 @@
             if (e.code === 'KeyS') keys.s = true;
             if (e.code === 'KeyA') keys.a = true;
             if (e.code === 'KeyD') keys.d = true;
+            if (e.code === 'Space') keys.up = true;
+            if (e.code === 'KeyC') keys.down = true;
             if (e.code === 'Space' && canJump && !netLoading()) { velY = 10; canJump = false; }
             if (e.key >= 1 && e.key <= 5) { gameState.selectedSlot = e.key - 1; updateUI(); }
         });
@@ -3067,6 +3072,8 @@
             if (e.code === 'KeyS') keys.s = false;
             if (e.code === 'KeyA') keys.a = false;
             if (e.code === 'KeyD') keys.d = false;
+            if (e.code === 'Space') keys.up = false;
+            if (e.code === 'KeyC') keys.down = false;
         });
 
         function onAttack() {
@@ -3207,7 +3214,7 @@
         }
         function repairState(t) {
             const f = t.rec;
-            const have = countItemInInventory('stone_material');
+            const have = costHave('stone_material');
             const left = DEMOLISH_WINDOW_MS - (Date.now() - f.createdAt);
             const pending = pendingBuilds.has(f.id);
             const name = PIECE_NAMES[t.kind];
@@ -3297,6 +3304,7 @@
         controls.addEventListener('unlock', () => { if (dead) return; closeRepairWheel(false); closeMap(); });
         controls.addEventListener('unlock', () => { // Esc: до первого входа — стартовое меню, потом — окно паузы
             if (dead || gameState.isInventoryOpen) return;
+            if (isAdmin && adminShift && entered && role) { openAdminPanel(); return; } // Shift+Esc у админа — админ-панель вместо обычной паузы
             if (entered) showPause(); else document.getElementById('main-menu').style.display = 'flex';
         });
 
@@ -3699,7 +3707,7 @@
             destroy() { if (this.destroyed) return; this.destroyed = true; try { this.ws.close(); } catch (_) {} }
             _onMsg(m) {
                 switch (m.k) {
-                    case 'open': clearTimeout(this._ct); WSPeer.diag = ''; this.opened = true; this.id = m.id; this.savedWorld = m.world || null; this.pdata = m.pdata || null; this._emit('open', m.id); break;
+                    case 'open': clearTimeout(this._ct); WSPeer.diag = ''; this.opened = true; this.id = m.id; this.savedWorld = m.world || null; this.pdata = m.pdata || null; isAdmin = !!m.admin; this._emit('open', m.id); break;
                     case 'err': this._emit('error', { type: m.type }); break;
                     case 'copen': if (this.hostConn) { this.hostConn.open = true; this.hostConn._emit('open'); } break;
                     case 'conn': { const c = new WSConn(this, m.pid, true); this.conns.set(m.pid, c); this._emit('connection', c); c.open = true; c._emit('open'); break; }
@@ -3830,7 +3838,7 @@
         // ---------- получение урона и смерть ----------
         let dead = false; // погиб и выбирает на карте, где возродиться
         function applyDamage(d, kill) {
-            if (netLoading() || dead) return;
+            if (netLoading() || dead || adm.god) return;
             const now = performance.now();
             if (now < playerState.invulnUntil) return;
             playerState.hp = Math.max(0, playerState.hp - d);
@@ -3968,6 +3976,59 @@
             sleepbags.forEach(b => { if (b.owner !== myId) return; const d = Math.hypot(mapPx(b.x) - cx, mapPx(b.z) - cy); if (d < bd) { bd = d; best = b; } });
             if (best) respawnAt(best);
         });
+
+        // ---------- админ-панель (только для аккаунта-админа; сервер сообщает об этом при входе) ----------
+        // Открывается сочетанием Shift+Esc. Три переключателя для тестов: бесплатные крафты и стройка, полёт сквозь стены, бессмертие.
+        let isAdmin = false, adminShift = false, adminOpen = false;
+        const admPanel = document.createElement('div');
+        admPanel.id = 'adm-panel';
+        admPanel.style.cssText = 'position:fixed;inset:0;z-index:400;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,0.72);color:#fff;font-family:inherit;';
+        admPanel.innerHTML = '<div style="width:min(380px,90vw);box-sizing:border-box;padding:24px;border-radius:16px;background:#1f2a33;border:2px solid #4da3ff;display:flex;flex-direction:column;gap:12px;">' +
+            '<h2 style="margin:0 0 4px;text-align:center;font-size:22px;">🛡 Админ-панель</h2>' +
+            '<div style="text-align:center;font-size:13px;opacity:.75;margin-bottom:4px;">для тестов и поиска багов</div>' +
+            '<div id="adm-rows" style="display:flex;flex-direction:column;gap:10px;"></div>' +
+            '<div style="font-size:12px;opacity:.7;text-align:center;">Полёт: W/A/S/D по взгляду, Пробел — вверх, C — вниз<br>Shift+Esc или кнопка — закрыть</div>' +
+            '<button id="adm-close" style="padding:11px;font-size:16px;font-weight:bold;border:0;border-radius:10px;background:#00b894;color:#fff;cursor:pointer;">Закрыть</button></div>';
+        document.body.appendChild(admPanel);
+        const admBadge = document.createElement('div');
+        admBadge.style.cssText = 'position:fixed;left:14px;top:52px;z-index:150;padding:3px 9px;border-radius:8px;background:rgba(0,0,0,0.55);color:#8fd0ff;font:600 12px sans-serif;display:none;pointer-events:none;';
+        document.body.appendChild(admBadge);
+        const ADM_ROWS = [['free', '💰 Всё бесплатно (крафт, стройка, улучшения)'], ['noclip', '👻 NoClip — сквозь стены, полёт'], ['god', '❤️ Бессмертие']];
+        const admRowsEl = admPanel.querySelector('#adm-rows');
+        const admBtns = {};
+        ADM_ROWS.forEach(([k, label]) => {
+            const row = document.createElement('div'); row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:10px;';
+            const t = document.createElement('span'); t.textContent = label; t.style.cssText = 'font-size:15px;';
+            const b = document.createElement('button'); b.style.cssText = 'min-width:84px;padding:8px 10px;font-size:14px;font-weight:bold;border:0;border-radius:8px;cursor:pointer;';
+            b.onclick = () => { adm[k] = !adm[k]; if (k === 'god') netSend({ t: 'god', on: adm.god }); renderAdmin(); };
+            admBtns[k] = b; row.append(t, b); admRowsEl.appendChild(row);
+        });
+        function renderAdmin() {
+            ADM_ROWS.forEach(([k]) => { const on = adm[k]; admBtns[k].textContent = on ? 'ВКЛ' : 'ВЫКЛ'; admBtns[k].style.background = on ? '#00b894' : '#4a5560'; admBtns[k].style.color = '#fff'; });
+            const names = [adm.free && '💰 free', adm.noclip && '👻 noclip', adm.god && '❤️ god'].filter(Boolean);
+            admBadge.textContent = '🛡 ' + names.join(' · '); admBadge.style.display = isAdmin && names.length ? 'block' : 'none';
+        }
+        function openAdminPanel() {
+            if (!isAdmin || dead || adminOpen) return;
+            adminOpen = true; pauseEl.style.display = 'none'; admPanel.style.display = 'flex'; renderAdmin();
+            if (controls.isLocked) controls.unlock();
+        }
+        function closeAdminPanel() {
+            if (!adminOpen) return;
+            adminOpen = false; admPanel.style.display = 'none';
+            controls.lock();
+            setTimeout(() => { if (!controls.isLocked && !dead && entered && !adminOpen) showPause(); }, 700); // браузер мог не дать захватить мышь сразу — тогда обычная пауза с кнопкой «Продолжить»
+        }
+        admPanel.querySelector('#adm-close').onclick = closeAdminPanel;
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'Shift') adminShift = true;
+            if (e.code === 'Escape' && e.shiftKey && isAdmin && entered && role) { // когда мышь уже свободна, Esc приходит как обычное нажатие
+                e.preventDefault();
+                if (adminOpen) closeAdminPanel(); else if (!controls.isLocked) openAdminPanel();
+            }
+        }, true);
+        window.addEventListener('keyup', (e) => { if (e.key === 'Shift') adminShift = false; }, true);
+        window.addEventListener('blur', () => { adminShift = false; });
 
         // ---------- удар по другому игроку ----------
         function tryHitPlayer(item, blockDist) {
@@ -4330,7 +4391,7 @@
                 case 'pieceupg': applyPieceUpgrade(msg); break;
                 case 'piecedel': applyPieceDelete(msg); break;
                 case 'doorset': applyDoorSet(msg); break;
-                case 'doorlock': { const d = doors.get(msg.id); if (d && !d.locked) { setDoorLocked(d, msg.owner); if (msg.owner === myId) { removeFromInventory('lock', 1); updateUI(); } } break; }
+                case 'doorlock': { const d = doors.get(msg.id); if (d && !d.locked) { setDoorLocked(d, msg.owner); if (msg.owner === myId) { costSpend('lock', 1); updateUI(); } } break; }
                 case 'doorstate': { const d = doors.get(msg.id); if (d) setDoorOpen(d, msg.open); break; }
                 case 'tcset': applyTcSet(msg); break;
                 case 'bears': applyBearSnap(msg.b, msg.c); break;
@@ -4424,7 +4485,7 @@
                 case 'atk': { // удар по игроку: проверяем и передаём урон жертве
                     if (!p.state || typeof m.target !== 'string' || m.target === fromId) return;
                     const v = hostPlayers.get(m.target);
-                    if (!v || !v.state || v.dead) return;
+                    if (!v || !v.state || v.dead || v.god) return;
                     const now = performance.now();
                     if (now - (p.lastAtk || 0) < 250) return; p.lastAtk = now;
                     const base = DAMAGE[p.state.item];
@@ -4451,6 +4512,7 @@
                     if (fromId !== myId && m.target !== myId) spawnBlood(bp.x, bp.y, bp.z, head ? 16 : 11);
                     break;
                 }
+                case 'god': { p.god = !!m.on; break; } // админ включил/выключил бессмертие: урон ему не засчитываем
                 case 'respawned': { // игрок выбрал, где возродиться — снова живой
                     const nowR = performance.now();
                     p.dead = false; p.protUntil = nowR + RESPAWN_PROTECT_MS; p.hp = MAX_HP; p.hpAt = nowR; p.lastDied = nowR;
@@ -5215,11 +5277,11 @@
             updateBuildGhost(currentItem, dt);
 
             if (controls.isLocked) {
-                const speed = 9;
+                const speed = adm.noclip ? 16 : 9;
                 const dir = new THREE.Vector3();
                 if(keys.w) dir.z -= 1; if(keys.s) dir.z += 1; if(keys.a) dir.x -= 1; if(keys.d) dir.x += 1;
                 if (frozen) dir.set(0, 0, 0);
-                dir.normalize().applyQuaternion(camera.quaternion); dir.y = 0; dir.normalize();
+                dir.normalize().applyQuaternion(camera.quaternion); if (!adm.noclip) dir.y = 0; else if (!frozen) dir.y += (keys.up ? 1 : 0) - (keys.down ? 1 : 0); dir.normalize();
                 const playerRadius = 0.6;
                 const feetY = camera.position.y - 2.5;
 
@@ -5267,12 +5329,13 @@
                     for (let i = 0; i < steps; i++) {
                         const nx = pos.x + sx, nz = pos.z + sz;
                         if (withinWorldBounds(nx, nz)) { pos.x = nx; pos.z = nz; }
-                        pushOut(pos, camera.position.y - 2.5);
+                        if (!adm.noclip) pushOut(pos, camera.position.y - 2.5);
                     }
-                    if (!dir.lengthSq()) pushOut(pos, camera.position.y - 2.5); // стоишь на месте, а рядом построили стену — тоже вытолкнет
+                    if (!dir.lengthSq() && !adm.noclip) pushOut(pos, camera.position.y - 2.5); // стоишь на месте, а рядом построили стену — тоже вытолкнет
                     camera.position.x = pos.x; camera.position.z = pos.z;
                 }
 
+                const ncY = camera.position.y + dir.y * speed * dt; // режим «сквозь стены»: летим туда, куда смотрим
                 velY -= 25 * dt;
                 camera.position.y += velY * dt;
 
@@ -5308,6 +5371,7 @@
                 }
                 if (stairH !== null && stairH > groundH && camera.position.y <= stairH + 0.001) canJump = true;
                 if(camera.position.y < groundH) { camera.position.y = groundH; velY = 0; canJump = true; }
+                if (adm.noclip) { camera.position.y = Math.max(ncY, getTerrainHeight(camera.position.x, camera.position.z) - 40); velY = 0; canJump = true; }
                 const isMoving = keys.w || keys.s || keys.a || keys.d;
                 if (isMoving && canJump) {
                     viewModel.position.y = Math.sin(time * 0.012) * 0.02;

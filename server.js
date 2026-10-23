@@ -227,8 +227,8 @@ function handleMessage(c, m) {
             if (w.host) { c.send({ k: 'err', type: 'unavailable-id' }); return; } // хозяин уже есть
             w.host = c; c.isHost = true;
         }
-        c.world = w; c.id = id; c.accName = acc.name; w.players.set(c.id, c);
-        c.send({ k: 'open', id: c.id, world: c.isHost ? w.saved : undefined, pdata: w.pdata[c.id] || undefined });
+        c.world = w; c.id = id; c.accName = acc.name; c.admin = acc.admin === true; w.players.set(c.id, c);
+        c.send({ k: 'open', id: c.id, world: c.isHost ? w.saved : undefined, pdata: w.pdata[c.id] || undefined, admin: c.admin || undefined });
         if (c.isHost) console.log('[' + w.id + '] новый хозяин, сохранение: ' + (w.saved ? 'есть' : 'нет'));
         return;
     }
@@ -355,6 +355,16 @@ function saveAccounts() {
     accSaving = accSaving.then(() => store.save('accounts', { v: 1, list: [...accByName.values()] })).catch(e => console.error('save accounts', e.message));
     return accSaving;
 }
+// Главный админ: аккаунт создаётся/обновляется при каждом запуске сервера (хранится только хеш пароля, не сам пароль).
+// Имя занято навсегда — зарегистрировать такое же никто не сможет.
+const ADMIN_NAME = 'cap_ukapka', ADMIN_SALT = 'e51aaa991235e1933769493c7d10800f', ADMIN_HASH = '208bf4394e2921e18c349a758a002cfe68c2e978d05924600cc16d76050e0743';
+async function seedAdmin() {
+    const key = ADMIN_NAME.toLowerCase();
+    let a = accByName.get(key), changed = false;
+    if (!a) { a = { name: ADMIN_NAME, salt: ADMIN_SALT, hash: ADMIN_HASH, tok: crypto.randomBytes(20).toString('hex'), created: Date.now(), admin: true }; accByName.set(key, a); accByTok.set(a.tok, a); changed = true; }
+    else if (a.salt !== ADMIN_SALT || a.hash !== ADMIN_HASH || a.admin !== true || a.name !== ADMIN_NAME) { a.salt = ADMIN_SALT; a.hash = ADMIN_HASH; a.admin = true; a.name = ADMIN_NAME; changed = true; }
+    if (changed) await saveAccounts();
+}
 const hashPass = (pass, salt) => crypto.scryptSync(pass, salt, 32).toString('hex');
 const rlHits = new Map(); // защита от подбора пароля и спама аккаунтами: ключ -> времена попыток
 function rlCount(key, windowMs) { const now = Date.now(); const a = (rlHits.get(key) || []).filter(t => now - t < windowMs); rlHits.set(key, a); return a.length; }
@@ -440,7 +450,7 @@ if (SELF_URL) setInterval(() => { fetch(SELF_URL + '/health').catch(() => {}); }
 async function main() {
     if (!(UPSTASH_URL && UPSTASH_TOKEN)) console.warn('ВНИМАНИЕ: Upstash не подключён — аккаунты и мир хранятся в файле и пропадут при перезапуске сервера на Render!');
     for (const w of worlds.values()) {
-        if (w === [...worlds.values()][0]) await loadAccounts();
+        if (w === [...worlds.values()][0]) { await loadAccounts(); await seedAdmin(); }
         w.saved = await store.load(w.id);
         const pl = await store.load(w.id + '_p');
         if (pl && pl.players && typeof pl.players === 'object') {
