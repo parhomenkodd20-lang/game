@@ -3034,7 +3034,7 @@
         accSwitchEl.onclick = () => setAccMode(accMode === 'register' ? 'login' : 'register');
         [accNameEl, accPassEl].forEach(el => el.addEventListener('keydown', (e) => { if (e.key === 'Enter') accSubmit(); }));
         document.getElementById('acc-logout').onclick = () => { accountLogout(); setAccMode('login'); refreshAccountUI(); };
-        refreshAccountUI();
+        // первый показ окна аккаунта — в самом конце загрузки (см. ниже), когда уже объявлены настройки сети
 
         window.addEventListener('keydown', (e) => {
             if (e.target && e.target.tagName === 'INPUT') return; // печатаем ник — игровые клавиши не трогаем
@@ -5044,6 +5044,7 @@
             setTimeout(() => location.reload(), 300);
         }
         document.getElementById('pause-leave').addEventListener('click', () => { document.getElementById('pause-leave').disabled = true; leaveServer(); });
+        refreshAccountUI();
         if (USE_WS) initWorldMenu(); else startNetwork();
 
         // --- DEV-ПАНЕЛЬ (встроим кнопки прямо здесь, т.к. HTML их содержит) ---
