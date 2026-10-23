@@ -117,6 +117,17 @@
         #menu-char { width: min(320px, 60vw); height: min(400px, 44vh); cursor: grab; touch-action: none; }
         #menu-char:active { cursor: grabbing; }
         #menu-hint-keys { opacity: 0.85; margin-top: 14px; font-size: 13px; text-align: center; max-width: 90vw; text-shadow: 0 1px 4px rgba(0,40,90,0.5); }
+        #acc-panel { position: absolute; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 4px; background: rgba(20,70,120,0.4); z-index: 5; }
+        .acc-card { display: flex; flex-direction: column; align-items: stretch; width: min(340px, 88vw); box-sizing: border-box; padding: 22px; background: rgba(0,0,0,0.42); border-radius: 16px; gap: 10px; }
+        .acc-input { padding: 11px 14px; font-size: 18px; text-align: center; color: #fff; background: rgba(0,40,90,0.45); border: 2px solid rgba(255,255,255,0.5); border-radius: 10px; outline: none; user-select: text; width: 100%; box-sizing: border-box; }
+        .acc-input::placeholder { color: rgba(255,255,255,0.6); }
+        .acc-input:focus { border-color: #00b894; }
+        #acc-err { min-height: 18px; font-size: 14px; text-align: center; color: #ffd9d4; text-shadow: 0 1px 3px rgba(0,0,0,0.6); }
+        #acc-submit { padding: 13px; font-size: 20px; font-weight: bold; color: #fff; background: #00b894; border: none; border-radius: 10px; cursor: pointer; }
+        #acc-submit:hover { background: #00d1a7; }
+        #acc-submit:disabled { opacity: 0.6; cursor: wait; }
+        #menu-account { margin-top: 10px; display: flex; align-items: center; gap: 10px; font-size: 15px; text-shadow: 0 1px 4px rgba(0,40,90,0.5); }
+        #menu-account .menu-back { margin: 0; padding: 5px 12px; font-size: 13px; }
         #server-panel { display: none; width: min(380px, 90vw); background: rgba(0,0,0,0.42); }
         #server-panel .crafting-list { max-height: 50vh; }
         #server-hint { font-size: 13px; opacity: 0.8; text-align: center; margin-top: 10px; min-height: 16px; }
@@ -217,11 +228,19 @@
         <div id="menu-main">
             <h1 id="menu-title">Прогулка по природе 🌲</h1>
             <canvas id="menu-char" width="320" height="400"></canvas>
-            <input id="nick-input" type="text" maxlength="15" placeholder="Твой ник (до 15 символов)" autocomplete="off" spellcheck="false"
-                   style="width:300px;max-width:84vw;padding:11px 16px;margin-top:4px;margin-bottom:6px;font-size:19px;text-align:center;color:#fff;background:rgba(0,40,90,0.35);border:2px solid rgba(255,255,255,0.55);border-radius:10px;outline:none;user-select:text;">
-            <div id="nick-err" style="display:none;color:#ffe0dc;background:rgba(190,40,30,0.7);padding:3px 10px;border-radius:6px;font-size:14px;margin-bottom:6px;">Введи ник, чтобы зайти в игру</div>
             <button id="play-btn" style="margin-top:6px;">ИГРАТЬ</button>
+            <div id="menu-account"><span id="acc-label"></span><button id="acc-logout" class="menu-back">Сменить аккаунт</button></div>
             <p id="menu-hint-keys">WASD - Ходьба | Tab - Инвентарь | E (У) - Сумка | ЛКМ - Удар/Рубка | 1-5 - Слоты | G - Карта</p>
+        </div>
+        <div id="acc-panel">
+            <div class="acc-card">
+                <div class="crafting-title" id="acc-title">Создание аккаунта</div>
+                <input id="acc-name" class="acc-input" type="text" maxlength="15" placeholder="Имя (3–15 символов)" autocomplete="username" spellcheck="false">
+                <input id="acc-pass" class="acc-input" type="password" maxlength="64" placeholder="Пароль (от 4 символов)" autocomplete="current-password">
+                <div id="acc-err"></div>
+                <button id="acc-submit">Создать аккаунт</button>
+            </div>
+            <button class="menu-back" id="acc-switch">Войти в аккаунт</button>
         </div>
         <div class="crafting-panel" id="server-panel">
             <div class="crafting-title">Серверы</div>
@@ -2945,17 +2964,10 @@
             return Array.from(String(s || '').replace(/[\u0000-\u001f\u007f<>]/g, '').replace(/\s+/g, ' ').trim()).slice(0, NICK_MAX).join('').trim();
         }
         let myNick = '';
-        const nickInput = document.getElementById('nick-input'), nickErr = document.getElementById('nick-err');
-        try { nickInput.value = cleanNick(localStorage.getItem('nw_nick')); } catch (e) {}
         const mainMenuEl = document.getElementById('main-menu'), menuMainEl = document.getElementById('menu-main'), serverPanelEl = document.getElementById('server-panel');
         function startPlay() { // кнопка ИГРАТЬ: проверяем ник и открываем список серверов
             if (entered && role) { mainMenuEl.style.display = 'none'; controls.lock(); return; } // уже в игре (меню показалось после закрытия окна) — просто продолжаем
-            const n = cleanNick(nickInput.value);
-            if (!n) { nickErr.style.display = 'block'; nickInput.focus(); return; }
-            nickErr.style.display = 'none';
-            myNick = n; nickInput.value = n;
-            try { localStorage.setItem('nw_nick', n); } catch (e) {}
-            nickInput.blur();
+            if (!account) { refreshAccountUI(); return; } // без аккаунта в игру не пускаем
             if (USE_WS) openServerMenu(); else enterGame(null);
         }
         function enterGame(wid) { // выбрали сервер — подключаемся и входим в игру
@@ -2966,8 +2978,63 @@
             controls.lock();
         }
         document.getElementById('play-btn').onclick = startPlay;
-        nickInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') startPlay(); });
-        nickInput.addEventListener('input', () => { nickErr.style.display = 'none'; });
+
+        // ---------- аккаунт: имя + пароль; с любого устройства заходишь в свой мир как сам ----------
+        let account = null; // { name }
+        try { const a = JSON.parse(localStorage.getItem('nw_acc') || 'null'); if (a && typeof a.name === 'string' && cleanNick(a.name)) account = { name: cleanNick(a.name) }; } catch (e) {}
+        const accPanelEl = document.getElementById('acc-panel'), accNameEl = document.getElementById('acc-name'), accPassEl = document.getElementById('acc-pass'),
+              accErrEl = document.getElementById('acc-err'), accSubmitEl = document.getElementById('acc-submit'), accSwitchEl = document.getElementById('acc-switch'),
+              accTitleEl = document.getElementById('acc-title');
+        let accMode = 'register';
+        function setAccMode(mode) {
+            accMode = mode; accErrEl.textContent = '';
+            accTitleEl.textContent = mode === 'register' ? 'Создание аккаунта' : 'Вход в аккаунт';
+            accSubmitEl.textContent = mode === 'register' ? 'Создать аккаунт' : 'Войти';
+            accSwitchEl.textContent = mode === 'register' ? 'Войти в аккаунт' : 'Создать новый аккаунт';
+            accPassEl.autocomplete = mode === 'register' ? 'new-password' : 'current-password';
+        }
+        function refreshAccountUI() {
+            if (!USE_WS && !account) account = { name: 'Игрок' + (100 + Math.floor(Math.random() * 900)) }; // без игрового сервера аккаунты не нужны
+            myNick = account ? account.name : '';
+            accPanelEl.style.display = account ? 'none' : 'flex';
+            document.getElementById('menu-account').style.display = account && USE_WS ? 'flex' : 'none';
+            document.getElementById('acc-label').textContent = account ? '👤 ' + account.name : '';
+            if (!account) {
+                try { const msg = sessionStorage.getItem('nw_accmsg'); if (msg) { accErrEl.textContent = msg; sessionStorage.removeItem('nw_accmsg'); } } catch (e) {}
+                setTimeout(() => { try { accNameEl.focus(); } catch (e) {} }, 50);
+            }
+        }
+        function accountLogout() {
+            account = null;
+            try { localStorage.removeItem('nw_acc'); localStorage.removeItem('nw_tok'); } catch (e) {}
+            PLAYER_TOKEN = Array.from(crypto.getRandomValues(new Uint8Array(20)), b => b.toString(16).padStart(2, '0')).join('');
+        }
+        async function accSubmit() {
+            const name = cleanNick(accNameEl.value), pass = accPassEl.value;
+            if (name.length < 3) { accErrEl.textContent = 'Имя — от 3 до 15 символов'; return; }
+            if (pass.length < 4) { accErrEl.textContent = 'Пароль — от 4 символов'; return; }
+            accSubmitEl.disabled = true; accErrEl.textContent = 'Подключаюсь к серверу… (если он спал — до минуты)';
+            const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 70000);
+            try {
+                const r = await fetch(SERVER_HTTP + (accMode === 'register' ? '/register' : '/login'), { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ name, pass, tok: PLAYER_TOKEN }), signal: ctl.signal });
+                const j = await r.json().catch(() => ({}));
+                if (r.ok && j.ok && typeof j.tok === 'string') {
+                    PLAYER_TOKEN = j.tok; account = { name: cleanNick(j.name) };
+                    try { localStorage.setItem('nw_tok', j.tok); localStorage.setItem('nw_acc', JSON.stringify(account)); } catch (e) {}
+                    accPassEl.value = ''; accErrEl.textContent = '';
+                    refreshAccountUI();
+                } else {
+                    const errs = { taken: 'Аккаунт с таким именем уже есть — придумай другое имя', bad: 'Неверное имя или пароль', rate: 'Слишком много попыток — подожди немного', name: 'Имя — от 3 до 15 символов', pass: 'Пароль — от 4 символов' };
+                    accErrEl.textContent = errs[j.err] || 'Ошибка сервера, попробуй ещё раз';
+                }
+            } catch (e) { accErrEl.textContent = 'Нет связи с сервером. Подожди минуту (он мог спать) и попробуй снова'; }
+            clearTimeout(to); accSubmitEl.disabled = false;
+        }
+        accSubmitEl.onclick = accSubmit;
+        accSwitchEl.onclick = () => setAccMode(accMode === 'register' ? 'login' : 'register');
+        [accNameEl, accPassEl].forEach(el => el.addEventListener('keydown', (e) => { if (e.key === 'Enter') accSubmit(); }));
+        document.getElementById('acc-logout').onclick = () => { accountLogout(); setAccMode('login'); refreshAccountUI(); };
+        refreshAccountUI();
 
         window.addEventListener('keydown', (e) => {
             if (e.target && e.target.tagName === 'INPUT') return; // печатаем ник — игровые клавиши не трогаем
@@ -3580,7 +3647,7 @@
         const SERVER_WS = SERVER_HTTP.replace(/^http/, 'ws') + '/';
         let worldId = 'w1';
         try { worldId = localStorage.getItem('nw_world') || 'w1'; } catch (e) {}
-        const PLAYER_TOKEN = (() => { // секрет игрока: по нему сервер узнаёт тебя после перезахода (твои двери и шкафы остаются твоими)
+        let PLAYER_TOKEN = (() => { // секрет игрока: по нему сервер узнаёт тебя после перезахода (твои двери и шкафы остаются твоими)
             const gen = () => Array.from(crypto.getRandomValues(new Uint8Array(20)), b => b.toString(16).padStart(2, '0')).join('');
             try { let t = localStorage.getItem('nw_tok'); if (t && /^[A-Za-z0-9_-]{16,64}$/.test(t)) return t; t = gen(); localStorage.setItem('nw_tok', t); return t; } catch (e) { return gen(); }
         })();
@@ -4701,8 +4768,12 @@
         }
         document.getElementById('net-solo-btn').addEventListener('click', playSolo);
 
-        const FATAL_NET = ['replaced', 'full', 'no-world', 'bad-token'];
+        const FATAL_NET = ['replaced', 'full', 'no-world', 'bad-token', 'no-account'];
         function fatalNetError(type) {
+            if (type === 'no-account') { // сервер не знает этот аккаунт (например, база сервера обнулилась): просим войти заново
+                try { sessionStorage.setItem('nw_accmsg', 'Сервер не нашёл твой аккаунт. Войди заново или создай новый.'); } catch (e) {}
+                accountLogout(); location.reload(); return;
+            }
             restarting = true; netGen++;
             teardownNetwork();
             lastNetError = type; netFatal = type;

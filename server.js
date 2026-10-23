@@ -216,6 +216,8 @@ function handleMessage(c, m) {
         const w = worlds.get(String(m.world || 'w1'));
         if (!w) { c.send({ k: 'err', type: 'no-world' }); return; }
         if (typeof m.tok !== 'string' || !/^[A-Za-z0-9_-]{16,64}$/.test(m.tok)) { c.send({ k: 'err', type: 'bad-token' }); return; }
+        const acc = accByTok.get(m.tok);
+        if (!acc) { c.send({ k: 'err', type: 'no-account' }); return; } // заходить можно только с аккаунтом
         const id = idFromToken(m.tok);
         const old = w.players.get(id);
         if (old) { old.send({ k: 'err', type: 'replaced' }); old.kill(); } // тот же игрок зашёл с другой вкладки/после обрыва — старое соединение закрываем
@@ -224,7 +226,7 @@ function handleMessage(c, m) {
             if (w.host) { c.send({ k: 'err', type: 'unavailable-id' }); return; } // хозяин уже есть
             w.host = c; c.isHost = true;
         }
-        c.world = w; c.id = id; w.players.set(c.id, c);
+        c.world = w; c.id = id; c.accName = acc.name; w.players.set(c.id, c);
         c.send({ k: 'open', id: c.id, world: c.isHost ? w.saved : undefined, pdata: w.pdata[c.id] || undefined });
         if (c.isHost) console.log('[' + w.id + '] новый хозяин, сохранение: ' + (w.saved ? 'есть' : 'нет'));
         return;
@@ -256,7 +258,7 @@ function handleMessage(c, m) {
             if (!c.isHost && !c.attached) return;
             if (!isNum(m.x, 2000) || !isNum(m.y, 500) || !isNum(m.z, 2000) || !isNum(m.yaw, 10) || !isNum(m.pitch, 10)) return;
             c.state = { x: m.x, y: m.y, z: m.z, yaw: m.yaw, pitch: m.pitch, item: HELD_ITEMS.includes(m.item) ? m.item : null, air: !!m.air, tp: Number.isInteger(m.tp) ? m.tp : 0 };
-            c.nick = typeof m.nick === 'string' ? cleanNick(m.nick) : '';
+            c.nick = c.accName || (typeof m.nick === 'string' ? cleanNick(m.nick) : ''); // ник = имя аккаунта, подделать нельзя
             c.ver++; c.fwdPending = true;
             return;
         }
@@ -334,7 +336,68 @@ setInterval(() => {
 // ---------------------------------------------------------------------
 // HTTP: список миров, проверка работы, при желании — сама игра (index.html рядом с server.js)
 // ---------------------------------------------------------------------
-const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET, OPTIONS' };
+const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type' };
+
+// ---------------------------------------------------------------------
+// Аккаунты: имя + пароль. У аккаунта есть секретный токен — им игрок заходит в мир с любого устройства (id игрока считается от токена,
+// поэтому постройки, двери, инвентарь и место выхода «идут» за аккаунтом). Пароль храним только в виде хеша (scrypt + соль).
+// ---------------------------------------------------------------------
+const accByName = new Map(); // имя в нижнем регистре -> { name, salt, hash, tok, created }
+const accByTok = new Map();
+async function loadAccounts() {
+    const d = await store.load('accounts');
+    if (d && Array.isArray(d.list)) for (const a of d.list) if (a && typeof a.name === 'string' && typeof a.tok === 'string') { accByName.set(a.name.toLowerCase(), a); accByTok.set(a.tok, a); }
+    console.log('Аккаунтов: ' + accByName.size);
+}
+let accSaving = Promise.resolve();
+function saveAccounts() {
+    accSaving = accSaving.then(() => store.save('accounts', { v: 1, list: [...accByName.values()] })).catch(e => console.error('save accounts', e.message));
+    return accSaving;
+}
+const hashPass = (pass, salt) => crypto.scryptSync(pass, salt, 32).toString('hex');
+const rlHits = new Map(); // защита от подбора пароля и спама аккаунтами: ключ -> времена попыток
+function rlCount(key, windowMs) { const now = Date.now(); const a = (rlHits.get(key) || []).filter(t => now - t < windowMs); rlHits.set(key, a); return a.length; }
+function rlHit(key) { const a = rlHits.get(key) || []; a.push(Date.now()); rlHits.set(key, a); }
+setInterval(() => { const now = Date.now(); for (const [k, a] of rlHits) if (!a.length || now - a[a.length - 1] > 3600000) rlHits.delete(k); }, 600000);
+function clientIp(req) { return String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || '?'; }
+function sendJson(res, code, obj) { res.writeHead(code, { ...CORS, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(obj)); }
+function handleAuth(req, res, kind) {
+    let body = '', big = false;
+    req.on('data', (c) => { body += c; if (body.length > 4096) { big = true; req.destroy(); } });
+    req.on('end', async () => {
+        if (big) return;
+        try {
+            let b; try { b = JSON.parse(body); } catch (_) { return sendJson(res, 400, { err: 'bad' }); }
+            if (!b || typeof b !== 'object') return sendJson(res, 400, { err: 'bad' });
+            const ip = clientIp(req);
+            const raw = typeof b.name === 'string' ? b.name.trim() : '';
+            const name = cleanNick(raw), pass = typeof b.pass === 'string' ? b.pass : '';
+            if (name.length < 3 || Array.from(raw).length > 15 || name !== raw.replace(/\s+/g, ' ')) return sendJson(res, 400, { err: 'name' });
+            if (pass.length < 4 || pass.length > 64) return sendJson(res, 400, { err: 'pass' });
+            const key = name.toLowerCase();
+            if (kind === 'register') {
+                if (rlCount('r' + ip, 3600000) >= 5) return sendJson(res, 429, { err: 'rate' });
+                if (accByName.has(key)) return sendJson(res, 409, { err: 'taken' });
+                // токен этого устройства (если ещё ничей) становится токеном аккаунта — тогда прежние постройки и вещи останутся за игроком
+                const tok = (typeof b.tok === 'string' && /^[A-Za-z0-9_-]{16,64}$/.test(b.tok) && !accByTok.has(b.tok)) ? b.tok : crypto.randomBytes(20).toString('hex');
+                const salt = crypto.randomBytes(16).toString('hex');
+                const acc = { name, salt, hash: hashPass(pass, salt), tok, created: Date.now() };
+                accByName.set(key, acc); accByTok.set(tok, acc);
+                rlHit('r' + ip);
+                await saveAccounts();
+                console.log('Новый аккаунт: ' + name);
+                return sendJson(res, 200, { ok: true, name, tok });
+            }
+            if (rlCount('f' + ip, 600000) >= 8) return sendJson(res, 429, { err: 'rate' });
+            const acc = accByName.get(key);
+            let ok = false;
+            if (acc) { const h = Buffer.from(hashPass(pass, acc.salt), 'hex'), a = Buffer.from(acc.hash, 'hex'); ok = h.length === a.length && crypto.timingSafeEqual(h, a); }
+            if (!ok) { rlHit('f' + ip); return sendJson(res, 401, { err: 'bad' }); }
+            return sendJson(res, 200, { ok: true, name: acc.name, tok: acc.tok });
+        } catch (e) { console.error('auth', e); sendJson(res, 500, { err: 'server' }); }
+    });
+}
+
 const server = http.createServer((req, res) => {
     const url = (req.url || '/').split('?')[0];
     if (req.method === 'OPTIONS') { res.writeHead(204, CORS); res.end(); return; }
@@ -343,6 +406,7 @@ const server = http.createServer((req, res) => {
         res.writeHead(200, { ...CORS, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
         res.end(JSON.stringify(list)); return;
     }
+    if (req.method === 'POST' && (url === '/register' || url === '/login')) { handleAuth(req, res, url.slice(1)); return; }
     if (url === '/health') { res.writeHead(200, CORS); res.end('ok'); return; }
     if (url === '/' || url === '/index.html') {
         const f = [path.join(__dirname, 'index.html'), path.join(__dirname, 'public', 'index.html')].find(x => fs.existsSync(x));
@@ -365,6 +429,7 @@ setInterval(() => {
 
 async function main() {
     for (const w of worlds.values()) {
+        if (w === [...worlds.values()][0]) await loadAccounts();
         w.saved = await store.load(w.id);
         const pl = await store.load(w.id + '_p');
         if (pl && pl.players && typeof pl.players === 'object') {
