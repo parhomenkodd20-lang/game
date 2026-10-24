@@ -2247,9 +2247,10 @@
             return true;
         }
         function bearHostStart() { // этот браузер стал хозяином мира — медведи живут у него
-            [...bears.values()].forEach(removeBear);
+            // Медведи, которые уже есть (мы видели их как обычный игрок или это перезапуск сети), остаются на месте — не исчезают и не появляются заново
+            bears.forEach(b => { b.x = b.rx; b.z = b.rz; b.rot = b.rrot; b.windup = 0; b.atkCd = 1; b.target = null; b.goal = null; b.stuckT = 0; });
             const t = Date.now(); bearSpawnAt = [];
-            for (let i = 0; i < BEAR_MAX; i++) bearSpawnAt.push(t + i * 400);
+            for (let i = bears.size; i < BEAR_MAX; i++) bearSpawnAt.push(t + (i - bears.size) * 400);
             bearLast = t;
         }
         function bearTick() {
@@ -2370,6 +2371,7 @@
                 const hostSide = role === 'host';
                 const tx = hostSide ? b.x : b.nx, tz = hostSide ? b.z : b.nz, tr = hostSide ? b.rot : b.nrot;
                 const k = Math.min(1, dt * 12);
+                if (Math.hypot(tx - b.rx, tz - b.rz) > 14) { b.rx = tx; b.rz = tz; b.rrot = tr; } // далеко (переподключение, потеря пакетов) — сразу на место, а не «летит» через карту
                 const ox = b.rx, oz = b.rz;
                 b.rx += (tx - b.rx) * k; b.rz += (tz - b.rz) * k; b.rrot += angDiff(tr, b.rrot) * Math.min(1, dt * 10);
                 const sp = Math.hypot(b.rx - ox, b.rz - oz) / Math.max(dt, 0.001);

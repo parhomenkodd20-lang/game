@@ -460,7 +460,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && (url === '/register' || url === '/login')) { handleAuth(req, res, url.slice(1)); return; }
     if (url === '/health') { // по этому адресу видно, где сервер хранит данные
         res.writeHead(200, { ...CORS, 'Content-Type': 'text/plain; charset=utf-8' });
-        res.end('ok\nготов: ' + (storageReady ? 'да' : 'нет, хранилище ещё не загрузилось') + '\nхранилище: ' + ((UPSTASH_URL && UPSTASH_TOKEN) ? 'Upstash (данные переживут перезапуск)' : 'ТОЛЬКО ФАЙЛ — при перезапуске Render данные и аккаунты СТИРАЮТСЯ') + '\nаккаунтов: ' + accByName.size);
+        res.end('ok\nготов: ' + (storageReady ? 'да' : 'нет, хранилище ещё не загрузилось') + '\nхранилище: ' + ((UPSTASH_URL && UPSTASH_TOKEN) ? 'Upstash (данные переживут перезапуск)' : 'ТОЛЬКО ФАЙЛ — при перезапуске Render данные и аккаунты СТИРАЮТСЯ') + '\nаккаунтов: ' + accByName.size + '\nработает без перезапуска: ' + Math.round(process.uptime() / 60) + ' мин (если число маленькое — сервер недавно перезапускался)\nсейчас подключено: ' + allConns.size);
         return;
     }
     if (url === '/' || url === '/index.html') {
