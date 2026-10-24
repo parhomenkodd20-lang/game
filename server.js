@@ -25,8 +25,9 @@ const TICK_MS = 50;              // как часто рассылаем поз�
 const MAX_FRAME = 4 * 1024 * 1024; // самое большое сообщение (сохранение мира от хозяина)
 const MAX_PLAYER_MSG = 32 * 1024;  // обычный игрок не может слать больше
 const MAX_SAVE_BYTES = 3 * 1024 * 1024;
-const SAVE_DELAY_MS = 5000;       // как часто пишем мир в хранилище (бесплатная база Upstash ограничена по числу запросов, поэтому не чаще)
-const PLAYER_SAVE_DELAY_MS = 5000;
+const SAVE_DELAY_MS = 20000;      // как часто пишем мир в хранилище (бесплатная база Upstash ограничена по числу запросов, поэтому не чаще)
+const PLAYER_SAVE_DELAY_MS = 20000;
+const URGENT_MIN_GAP_MS = 5000;   // «срочное» сохранение (игрок вышел, умер, построил) — но не чаще раза в 5 секунд на мир
 const PLAYER_KEEP_MS = 30 * 24 * 3600 * 1000; // данные игрока, который не заходил 30 дней, стираем
 const MAX_PLAYER_RECORDS = 3000;
 const HELD_ITEMS = ['stone', 'pickaxe', 'axe', 'mallet', 'torch', 'chertyozh', 'spear'];
@@ -77,8 +78,16 @@ const store = {
 const worlds = new Map(); // id -> { id, name, host, players: Map(id -> Conn), saved, saveTimer, dirty }
 WORLD_NAMES.forEach((name, i) => worlds.set('w' + (i + 1), { id: 'w' + (i + 1), name, host: null, players: new Map(), saved: null, saveTimer: null, dirty: false, pdata: {}, pTimer: null, pDirty: false }));
 
-function schedulePersist(w) {
+function schedulePersist(w, urgent) {
     w.dirty = true;
+    const now = Date.now();
+    if (urgent) { // после важного действия сохраняем почти сразу, но не чаще раза в 5 секунд
+        const wait = Math.max(300, (w.lastUrgent || 0) + URGENT_MIN_GAP_MS - now);
+        if (w.saveTimer) clearTimeout(w.saveTimer);
+        w.lastUrgent = now + wait;
+        w.saveTimer = setTimeout(() => { w.saveTimer = null; persistNow(w); }, wait);
+        return;
+    }
     if (w.saveTimer) return;
     w.saveTimer = setTimeout(() => { w.saveTimer = null; persistNow(w); }, SAVE_DELAY_MS);
 }
@@ -87,8 +96,16 @@ async function persistNow(w) {
     await persistPlayers(w);
 }
 // Данные игроков (инвентарь и место, где вышел) лежат отдельно от мира: id игрока -> запись. Хозяин мира их не трогает.
-function schedulePersistPlayers(w) {
+function schedulePersistPlayers(w, urgent) {
     w.pDirty = true;
+    const now = Date.now();
+    if (urgent) {
+        const wait = Math.max(300, (w.pLastUrgent || 0) + URGENT_MIN_GAP_MS - now);
+        if (w.pTimer) clearTimeout(w.pTimer);
+        w.pLastUrgent = now + wait;
+        w.pTimer = setTimeout(() => { w.pTimer = null; persistPlayers(w); }, wait);
+        return;
+    }
     if (w.pTimer) return;
     w.pTimer = setTimeout(() => { w.pTimer = null; persistPlayers(w); }, PLAYER_SAVE_DELAY_MS);
 }
@@ -205,7 +222,7 @@ function leaveWorld(c) {
     if (prec && c.pSynced) {
         if (!prec.dead && c.state) { prec.x = c.state.x; prec.y = c.state.y; prec.z = c.state.z; prec.yaw = c.state.yaw; prec.pitch = c.state.pitch; }
         if (c.nick) prec.nick = c.nick;
-        prec.at = Date.now(); schedulePersistPlayers(w);
+        prec.at = Date.now(); schedulePersistPlayers(w, true); // вышел — запоминаем срочно
     }
     for (const o of w.players.values()) { o.sentVer.delete(c.id); o.sentNick.delete(c.id); }
     c.world = null;
@@ -278,13 +295,13 @@ function handleMessage(c, m) {
             if (!rec) return;
             c.pSynced = true;
             if (!w.pdata[c.id] && Object.keys(w.pdata).length >= MAX_PLAYER_RECORDS) return;
-            w.pdata[c.id] = rec; schedulePersistPlayers(w);
+            w.pdata[c.id] = rec; schedulePersistPlayers(w, m.u === 1);
             return;
         }
         case 'save': { // хозяин присылает сохранение мира
             if (!c.isHost || !m.data || typeof m.data !== 'object') return;
             if (JSON.stringify(m.data).length > MAX_SAVE_BYTES) return;
-            w.saved = m.data; schedulePersist(w);
+            w.saved = m.data; schedulePersist(w, m.u === 1);
             return;
         }
     }

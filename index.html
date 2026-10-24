@@ -391,6 +391,13 @@
             g.connect(sfxOut); osc.start(t0); osc.stop(t0 + o.dur + 0.05);
         }
         var sfxOut = null;
+        function sfxCrackle(t0, o) { // россыпь крошечных щелчков — именно она даёт «хруст» (трава, щепки, гравий)
+            for (let i = 0; i < o.n; i++) {
+                const at = t0 + Math.pow(Math.random(), 1.6) * o.span; // щелчки гуще в начале
+                const f = o.f1 * Math.pow(o.f2 / o.f1, Math.random());
+                sfxNoiseBurst(at, { dur: 0.008 + Math.random() * 0.014, f, q: 0.9 + Math.random() * 1.5, gain: o.gain * (0.4 + Math.random() * 0.6), atk: 0.0008 });
+            }
+        }
         function sfxModal(t0, freqs, dec, gain) { // несколько затухающих «звенящих» тонов — звук удара по твёрдому предмету
             freqs.forEach((f, i) => sfxTone(t0, { f, dur: dec * (1 - i * 0.12), gain: gain / (1 + i * 0.7), atk: 0.001 }));
         }
@@ -403,41 +410,42 @@
             const out = sfxCtx.createGain(); out.gain.value = k; out.connect(sfxMaster); sfxOut = out;
             const t = now + 0.005, r = 0.92 + Math.random() * 0.16; // лёгкий разброс высоты — не звучит как копия
             switch (name) {
-                case 'swing': // короткий «вжих»: узкий шум с быстрым подъёмом частоты
-                    sfxNoiseBurst(t, { dur: 0.16, f: 700 * r, f2: 2600 * r, q: 2.2, gain: 0.32, atk: 0.05 }); break;
-                case 'chop': // топор по дереву: резкий щелчок + звонкое деревянное «тук» (несколько затухающих тонов)
-                    sfxNoiseBurst(t, { dur: 0.025, f: 3200 * r, q: 0.7, gain: 0.55, atk: 0.001, type: 'highpass' });
-                    sfxModal(t, [170 * r, 330 * r, 590 * r, 910 * r], 0.14, 0.45);
-                    sfxNoiseBurst(t + 0.01, { dur: 0.09, f: 1100 * r, q: 1.4, gain: 0.25, atk: 0.002 });
-                    sfxTone(t, { f: 110 * r, f2: 62, dur: 0.11, gain: 0.35, atk: 0.002 }); break;
-                case 'stone': // кирка по камню: сухой удар + металлический звон
-                    sfxNoiseBurst(t, { dur: 0.03, f: 4200 * r, q: 0.6, gain: 0.6, atk: 0.001, type: 'highpass' });
-                    sfxModal(t, [1450 * r, 2310 * r, 3380 * r, 4720 * r], 0.12, 0.2);
-                    sfxNoiseBurst(t + 0.005, { dur: 0.1, f: 1800 * r, q: 0.9, gain: 0.25, atk: 0.002 });
-                    sfxTone(t, { f: 140 * r, f2: 70, dur: 0.09, gain: 0.3, atk: 0.002 }); break;
-                case 'flesh': // удар по телу: глухой хлопок + мокрый шлепок
-                    sfxTone(t, { f: 95 * r, f2: 42, dur: 0.16, gain: 0.7, atk: 0.002 });
-                    sfxNoiseBurst(t, { dur: 0.07, f: 1500 * r, q: 0.9, gain: 0.4, atk: 0.001 });
-                    sfxNoiseBurst(t, { dur: 0.14, f: 420, q: 0.6, gain: 0.35, atk: 0.002, type: 'lowpass' }); break;
-                case 'hurt': sfxTone(t, { f: 80 * r, f2: 38, dur: 0.24, gain: 0.8, atk: 0.002 }); sfxNoiseBurst(t, { dur: 0.1, f: 1200, q: 0.8, gain: 0.35, atk: 0.001 }); sfxNoiseBurst(t, { dur: 0.2, f: 350, q: 0.6, gain: 0.35, type: 'lowpass' }); break;
-                case 'dooropen': { // скрип петли: пила с «дрожью» высоты через узкий резонанс
+                case 'swing': sfxNoiseBurst(t, { dur: 0.16, f: 700 * r, f2: 2600 * r, q: 2.2, gain: 0.32, atk: 0.05 }); break;
+                case 'chop': // топор по дереву: удар, деревянное «тук» и хруст щепок
+                    sfxNoiseBurst(t, { dur: 0.02, f: 3500 * r, q: 0.7, gain: 0.5, atk: 0.001, type: 'highpass' });
+                    sfxModal(t, [160 * r, 310 * r, 560 * r, 880 * r], 0.12, 0.4);
+                    sfxTone(t, { f: 105 * r, f2: 60, dur: 0.1, gain: 0.3, atk: 0.002 });
+                    sfxCrackle(t + 0.005, { n: 7, span: 0.09, f1: 1400, f2: 5500, gain: 0.65 }); break;
+                case 'stone': // кирка по камню: звонкий удар и хруст крошки
+                    sfxNoiseBurst(t, { dur: 0.025, f: 4500 * r, q: 0.6, gain: 0.55, atk: 0.001, type: 'highpass' });
+                    sfxModal(t, [1500 * r, 2400 * r, 3500 * r], 0.1, 0.16);
+                    sfxTone(t, { f: 130 * r, f2: 70, dur: 0.08, gain: 0.25, atk: 0.002 });
+                    sfxCrackle(t + 0.005, { n: 10, span: 0.14, f1: 2200, f2: 8000, gain: 0.7 }); break;
+                case 'flesh':
+                    sfxTone(t, { f: 95 * r, f2: 42, dur: 0.16, gain: 0.65, atk: 0.002 });
+                    sfxNoiseBurst(t, { dur: 0.06, f: 1500 * r, q: 0.9, gain: 0.4, atk: 0.001 });
+                    sfxCrackle(t, { n: 4, span: 0.07, f1: 700, f2: 2600, gain: 0.3 }); break;
+                case 'hurt': sfxTone(t, { f: 80 * r, f2: 38, dur: 0.24, gain: 0.8, atk: 0.002 }); sfxNoiseBurst(t, { dur: 0.1, f: 1200, q: 0.8, gain: 0.35, atk: 0.001 }); sfxCrackle(t, { n: 4, span: 0.08, f1: 600, f2: 2400, gain: 0.3 }); break;
+                case 'dooropen': { // скрип петли + потрескивание дерева
                     const o = sfxCtx.createOscillator(); o.type = 'sawtooth';
                     const f0 = 210 * r; o.frequency.setValueAtTime(f0, t); o.frequency.linearRampToValueAtTime(f0 * 1.55, t + 0.22); o.frequency.linearRampToValueAtTime(f0 * 1.2, t + 0.42);
                     const lfo = sfxCtx.createOscillator(), lg = sfxCtx.createGain(); lfo.frequency.value = 34; lg.gain.value = 9; lfo.connect(lg); lg.connect(o.frequency);
                     const bp = sfxCtx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 7; bp.frequency.setValueAtTime(900 * r, t); bp.frequency.linearRampToValueAtTime(1500 * r, t + 0.25); bp.frequency.linearRampToValueAtTime(1100 * r, t + 0.44);
-                    const g = sfxCtx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.28, t + 0.08); g.gain.setValueAtTime(0.28, t + 0.3); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.46);
+                    const g = sfxCtx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.24, t + 0.08); g.gain.setValueAtTime(0.24, t + 0.3); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.46);
                     o.connect(bp); bp.connect(g); g.connect(sfxOut); o.start(t); lfo.start(t); o.stop(t + 0.5); lfo.stop(t + 0.5);
-                    sfxNoiseBurst(t, { dur: 0.02, f: 2200, q: 1, gain: 0.35, atk: 0.001, type: 'highpass' }); // щелчок засова
+                    sfxCrackle(t, { n: 6, span: 0.4, f1: 900, f2: 3500, gain: 0.22 });
+                    sfxNoiseBurst(t, { dur: 0.02, f: 2200, q: 1, gain: 0.35, atk: 0.001, type: 'highpass' });
                     break; }
-                case 'doorclose': // хлопок деревянной двери + щелчок
-                    sfxNoiseBurst(t + 0.02, { dur: 0.03, f: 2600, q: 0.7, gain: 0.5, atk: 0.001, type: 'highpass' });
-                    sfxModal(t + 0.02, [120 * r, 240 * r, 430 * r], 0.22, 0.32);
-                    sfxTone(t + 0.02, { f: 80 * r, f2: 45, dur: 0.18, gain: 0.3, atk: 0.002 });
+                case 'doorclose':
+                    sfxNoiseBurst(t + 0.02, { dur: 0.03, f: 2600, q: 0.7, gain: 0.45, atk: 0.001, type: 'highpass' });
+                    sfxModal(t + 0.02, [120 * r, 240 * r, 430 * r], 0.2, 0.3);
+                    sfxTone(t + 0.02, { f: 80 * r, f2: 45, dur: 0.18, gain: 0.28, atk: 0.002 });
+                    sfxCrackle(t + 0.03, { n: 5, span: 0.1, f1: 1200, f2: 4500, gain: 0.3 });
                     sfxNoiseBurst(t + 0.16, { dur: 0.02, f: 2000, q: 1, gain: 0.3, atk: 0.001, type: 'highpass' }); break;
-                case 'step': // шаг по траве: сухой шорох (высокие частоты, быстрая атака) + едва слышный глухой топ
-                    sfxNoiseBurst(t, { dur: 0.09, f: 3600 * r, f2: 2200, q: 0.5, gain: 0.26, atk: 0.008, type: 'highpass' });
-                    sfxNoiseBurst(t + 0.015, { dur: 0.1, f: 1700 * r, q: 0.5, gain: 0.16, atk: 0.015 });
-                    sfxTone(t, { f: 85 * r, f2: 55, dur: 0.07, gain: 0.1, atk: 0.004 }); break;
+                case 'step': // хруст травы и сухих листьев под ногой
+                    sfxCrackle(t, { n: 9, span: 0.11, f1: 1800, f2: 7000, gain: 0.5 });
+                    sfxNoiseBurst(t, { dur: 0.1, f: 1100 * r, q: 0.5, gain: 0.12, atk: 0.02, type: 'lowpass' });
+                    sfxTone(t, { f: 80 * r, f2: 52, dur: 0.07, gain: 0.1, atk: 0.004 }); break;
                 case 'roar': { // рычание медведя: низкий «рваный» голос (пила с быстрой дрожью громкости) через два формантных фильтра + дыхание
                     const dur = 1.0, o = sfxCtx.createOscillator(); o.type = 'sawtooth';
                     o.frequency.setValueAtTime(95 * r, t); o.frequency.linearRampToValueAtTime(130 * r, t + 0.18); o.frequency.exponentialRampToValueAtTime(58 * r, t + dur);
@@ -3634,7 +3642,7 @@
         distInput.addEventListener('input', () => { settings.dist = parseInt(distInput.value, 10); distVal.textContent = settings.dist; applyDrawDistance(); saveSettings(); });
         fpsBox.addEventListener('change', () => { settings.fps = fpsBox.checked; saveSettings(); refreshPerf(); });
         pingBox.addEventListener('change', () => { settings.ping = pingBox.checked; saveSettings(); refreshPerf(); });
-        function showPause() { pauseConfirm.style.display = 'none'; pauseRespawn.style.display = 'block'; pauseEl.style.display = 'flex'; }
+        function showPause() { try { sendPlayerData(true); saveWorldNow(peer, true); } catch (_) {} pauseConfirm.style.display = 'none'; pauseRespawn.style.display = 'block'; pauseEl.style.display = 'flex'; }
         controls.addEventListener('lock', () => { pauseEl.style.display = 'none'; });
         document.getElementById('pause-resume').addEventListener('click', () => controls.lock());
         pauseRespawn.addEventListener('click', () => { pauseRespawn.style.display = 'none'; pauseConfirm.style.display = 'block'; }); // сначала спрашиваем, уверен ли
@@ -3935,7 +3943,7 @@
         const MAX_PLAYERS = 100;
         const SEND_INTERVAL_MS = 50;   // как часто шлём своё состояние
         const HOST_TICK_MS = 50;       // как часто хозяин рассылает позиции
-        const PEER_TIMEOUT_MS = 20000; // столько молчания = игрок отвалился
+        const PEER_TIMEOUT_MS = 45000; // столько молчания = игрок отвалился (вкладка в фоне тормозит таймеры — даём запас)
         const HELD_ITEMS = ['stone', 'pickaxe', 'axe', 'mallet', 'torch', 'chertyozh', 'spear'];
         const RESOURCE_ID = /^(tree|rock)_[rc]?\d{1,6}$/; // обычные (tree_5), возродившиеся (rock_r7) и кратерные (rock_c0)
         // ===== Свой игровой сервер (WebSocket). Впиши адрес сюда после запуска на Render, например 'my-game.onrender.com'.
@@ -4262,11 +4270,12 @@
             const key = JSON.stringify(rec), now = performance.now();
             if (!force && key === lastPinvJson && now - lastPinvAt < 30000) return;
             lastPinvJson = key; lastPinvAt = now;
+            if (force) rec.u = 1; // важный момент (смерть, выход, пауза) — серверу сохранить поскорее
             peer.sendRaw(rec);
             try { const o = Object.assign({}, rec); delete o.k; o.at = Date.now(); localStorage.setItem(plBackupKey(), JSON.stringify(o)); } catch (_) {} // запасная копия на устройстве
         }
-        setInterval(() => sendPlayerData(false), 2500);
-        document.addEventListener('visibilitychange', () => { if (document.hidden) sendPlayerData(true); });
+        setInterval(() => sendPlayerData(false), 5000);
+        document.addEventListener('visibilitychange', () => { if (document.hidden) { sendPlayerData(true); try { saveWorldNow(peer, true); } catch (_) {} } else { const n = performance.now(); lastHostMsgAt = n; hostPlayers.forEach(p => { p.lastSeen = n; }); } });
         mapCanvas.addEventListener('click', (e) => { // на карте смерти — клик по своему спальнику
             if (!dead) return;
             const r = mapCanvas.getBoundingClientRect();
@@ -4847,6 +4856,7 @@
                     break;
                 }
                 case 'build': { // игрок что-то строит: фундамент, стену/проём или крышу
+                    hostSaveSoon();
                     if (!isNum(m.x, 2000) || !isNum(m.y, 500) || !isNum(m.z, 2000)) return;
                     const now = performance.now();
                     if (now - (p.lastBuild || 0) < 300) return; p.lastBuild = now;
@@ -5001,8 +5011,12 @@
             const t = performance.now(); // пинг уходит всегда, даже если что-то в тике сломалось
             if (t - lastHostPingAt > 2000) { lastHostPingAt = t; hostBroadcast({ t: 'ping' }); }
         }
+        var lastHostInnerAt = 0, lastMonAt = 0, urgentTimer = null;
+        function hostSaveSoon() { if (role !== 'host' || urgentTimer) return; urgentTimer = setTimeout(() => { urgentTimer = null; try { saveWorldNow(peer, true); } catch (_) {} }, 3000); } // построили/сломали — сохраняем через 3 секунды
         function hostTickInner() {
             const now = performance.now();
+            if (now - lastHostInnerAt > 3000) hostPlayers.forEach(p => { p.lastSeen = now; }); // сами «зависли» (фоновая вкладка/лаг) — это не вина игроков, не выкидываем их
+            lastHostInnerAt = now;
             for (const [bid, b] of bags) if (now - b.created > BAG_LIFETIME_MS) hostAll({ t: 'bagdel', id: bid }); // старые сумки исчезают
             const changed = [];
             for (const [pid, p] of hostPlayers) {
@@ -5037,13 +5051,13 @@
         }
         // Хозяин раз в 10 секунд отдаёт серверу сохранение мира (только если что-то изменилось)
         let saveTicker = null, lastSavedJson = '', lastSaveSentAt = 0;
-        function saveWorldNow(p) {
+        function saveWorldNow(p, urgent) {
             if (!p || !p.isWS || role !== 'host') return;
             const data = worldPayload(); delete data.cycle;
             const json = JSON.stringify(data);
             const nowMs = Date.now();
             if (json === lastSavedJson && nowMs - lastSaveSentAt < 60000) return; // без изменений — всё равно раз в минуту «отмечаемся», чтобы знать, до какого момента мир жил
-            lastSavedJson = json; lastSaveSentAt = nowMs; data.savedAt = nowMs; p.sendRaw({ k: 'save', data });
+            lastSavedJson = json; lastSaveSentAt = nowMs; data.savedAt = nowMs; p.sendRaw({ k: 'save', data, u: urgent ? 1 : 0 });
         }
 
         // Запасная копия мира в самом браузере: любой игрок раз в 10 секунд запоминает, как выглядит мир (постройки, срубленное).
@@ -5096,7 +5110,7 @@
                 const restore = p.savedWorld || readLocalWorldCache(); // сначала сохранение с сервера, а если сервер «забыл» мир — копия из этого браузера
                 if (restore) { handleNetMessage({ t: 'welcome', id, players: [], ...restore }); if (typeof restore.savedAt === 'number') worldCatchUp((Date.now() - restore.savedAt) / 1000); } // мир с прошлого раза: постройки, срубленные деревья… и пока он спал, всё гнило
                 lastSavedJson = '';
-                saveTicker = makeTicker(() => saveWorldNow(p), 5000);
+                saveTicker = makeTicker(() => saveWorldNow(p), 20000);
             }
             updateOnlineCount();
             tryApplySavedPlayer(); // хозяин: мир восстановлен — возвращаем свои вещи и место
@@ -5268,6 +5282,8 @@
         makeTicker(() => {
             if (restarting || !PeerCtor || OFFLINE) return;
             const now = performance.now();
+            if (now - lastMonAt > 3000) lastHostMsgAt = now; // вкладка была в фоне/зависла — таймеры спали, а не хозяин молчал
+            lastMonAt = now;
             if (role === 'client') {
                 if (now - lastHostMsgAt > PEER_TIMEOUT_MS) { restartNetwork(netGen, 200); return; }
                 if (hostConn && hostConn.open && now - lastClientPingAt > 2000) { lastClientPingAt = now; hostConn.send({ t: 'ping', ts: performance.now() }); }
@@ -5276,11 +5292,11 @@
             }
         }, 1000);
 
-        if (USE_WS) makeTicker(cacheWorldLocally, 5000);
+        if (USE_WS) makeTicker(cacheWorldLocally, 20000);
 
         // Закрыли вкладку — сразу закрываем соединения, чтобы остальные не ждали таймаут
-        window.addEventListener('beforeunload', () => { try { sendPlayerData(true); } catch (_) {} try { saveWorldNow(peer); } catch (_) {} try { cacheWorldLocally(); } catch (_) {} try { if (peer) peer.destroy(); } catch (_) {} });
-        window.addEventListener('pagehide', () => { try { sendPlayerData(true); } catch (_) {} try { saveWorldNow(peer); } catch (_) {} try { if (peer) peer.destroy(); } catch (_) {} });
+        window.addEventListener('beforeunload', () => { try { sendPlayerData(true); } catch (_) {} try { saveWorldNow(peer, true); } catch (_) {} try { cacheWorldLocally(); } catch (_) {} try { if (peer) peer.destroy(); } catch (_) {} });
+        window.addEventListener('pagehide', () => { try { sendPlayerData(true); } catch (_) {} try { saveWorldNow(peer, true); } catch (_) {} try { if (peer) peer.destroy(); } catch (_) {} });
 
         // Начинаем показываться другим игрокам, как только нажали "ИГРАТЬ"
         controls.addEventListener('lock', () => { entered = true; lastSentAt = 0; }); // (раньше тут каждый раз сбрасывалось время суток на утро — из-за этого ночь не наступала)
