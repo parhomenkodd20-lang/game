@@ -26,7 +26,7 @@ const MAX_FRAME = 4 * 1024 * 1024; // самое большое сообщени
 const MAX_PLAYER_MSG = 32 * 1024;  // обычный игрок не может слать больше
 const MAX_SAVE_BYTES = 3 * 1024 * 1024;
 const SAVE_DELAY_MS = 30000;      // как часто пишем мир в хранилище (бесплатная база Upstash ограничена по числу запросов, поэтому не чаще)
-const PLAYER_SAVE_DELAY_MS = 60000;
+const PLAYER_SAVE_DELAY_MS = 30000;
 const PLAYER_KEEP_MS = 30 * 24 * 3600 * 1000; // данные игрока, который не заходил 30 дней, стираем
 const MAX_PLAYER_RECORDS = 3000;
 const HELD_ITEMS = ['stone', 'pickaxe', 'axe', 'mallet', 'torch', 'chertyozh', 'spear'];
@@ -503,10 +503,16 @@ async function main() {
 }
 main();
 
+let shuttingDown = false;
 async function shutdown() {
+    if (shuttingDown) return; shuttingDown = true;
     console.log('Остановка: сохраняю миры…');
-    if (storageReady) for (const w of worlds.values()) { try { await persistNow(w); } catch (_) {} }
+    setTimeout(() => process.exit(0), 8000).unref(); // Render даёт мало времени — не зависаем на медленной базе
+    if (storageReady) await Promise.all([...worlds.values()].map(async w => { try { if (w.dirty && w.saved) { w.dirty = false; await store.save(w.id, w.saved); } w.pDirty = true; await persistPlayers(w); } catch (_) {} }));
+    try { await saveAccounts(); } catch (_) {}
     process.exit(0);
 }
+process.on('uncaughtException', (e) => { console.error('uncaughtException (сервер продолжает работать):', e && e.stack || e); }); // одна ошибка не должна ронять весь сервер и стирать несохранённое
+process.on('unhandledRejection', (e) => { console.error('unhandledRejection:', e && e.stack || e); });
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);

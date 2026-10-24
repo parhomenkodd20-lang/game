@@ -356,16 +356,16 @@
                 const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return false;
                 sfxCtx = new AC();
                 const comp = sfxCtx.createDynamicsCompressor(); comp.threshold.value = -24; comp.knee.value = 24; comp.ratio.value = 6; comp.attack.value = 0.005; comp.release.value = 0.2;
-                const lp = sfxCtx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 6500; lp.Q.value = 0.5; // срезает «свистящие» высокие — уши не устают
-                sfxMaster = sfxCtx.createGain(); sfxMaster.gain.value = sfxVol * 0.55;
+                const lp = sfxCtx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 9500; lp.Q.value = 0.4; // срезает только самый «писк»
+                sfxMaster = sfxCtx.createGain(); sfxMaster.gain.value = sfxVol * 0.7;
                 sfxMaster.connect(lp); lp.connect(comp); comp.connect(sfxCtx.destination);
                 const len = sfxCtx.sampleRate * 2, buf = sfxCtx.createBuffer(1, len, sfxCtx.sampleRate), d = buf.getChannelData(0);
-                let b0 = 0; for (let i = 0; i < len; i++) { const w = Math.random() * 2 - 1; b0 = 0.97 * b0 + 0.03 * w; d[i] = (w * 0.5 + b0 * 6) * 0.5; } // чуть «розовый» шум, мягче белого
+                let b0 = 0; for (let i = 0; i < len; i++) { const w = Math.random() * 2 - 1; b0 = 0.97 * b0 + 0.03 * w; d[i] = (w * 0.8 + b0 * 2) * 0.6; } // почти белый шум с лёгким «телом»
                 sfxNoise = buf;
                 return true;
             } catch (e) { sfxCtx = null; sfxMaster = null; return false; }
         }
-        function sfxSetVol(v) { sfxVol = v; if (sfxMaster) sfxMaster.gain.value = v * 0.55; }
+        function sfxSetVol(v) { sfxVol = v; if (sfxMaster) sfxMaster.gain.value = v * 0.7; }
         ['pointerdown', 'keydown', 'mousedown'].forEach(ev => window.addEventListener(ev, () => { sfxInit(); }, { passive: true }));
         function sfxNoiseBurst(t0, o) { // o: dur, f, f2, q, gain, atk, type
             const src = sfxCtx.createBufferSource(); src.buffer = sfxNoise; src.loop = true;
@@ -385,6 +385,9 @@
             g.connect(sfxOut); osc.start(t0); osc.stop(t0 + o.dur + 0.05);
         }
         var sfxOut = null;
+        function sfxModal(t0, freqs, dec, gain) { // несколько затухающих «звенящих» тонов — звук удара по твёрдому предмету
+            freqs.forEach((f, i) => sfxTone(t0, { f, dur: dec * (1 - i * 0.12), gain: gain / (1 + i * 0.7), atk: 0.001 }));
+        }
         // name: swing | chop | stone | flesh | hurt | dooropen | doorclose | step | place ; pos — необязательно {x,y,z} (чем дальше, тем тише)
         function sfx(name, pos, vol) {
             if (sfxVol <= 0 || !sfxInit() || !sfxCtx || sfxCtx.state !== 'running') return;
@@ -394,27 +397,42 @@
             const out = sfxCtx.createGain(); out.gain.value = k; out.connect(sfxMaster); sfxOut = out;
             const t = now + 0.005, r = 0.92 + Math.random() * 0.16; // лёгкий разброс высоты — не звучит как копия
             switch (name) {
-                case 'swing': sfxNoiseBurst(t, { dur: 0.2, f: 500 * r, f2: 1500 * r, q: 0.7, gain: 0.17, atk: 0.07 }); break;
-                case 'chop':
-                    sfxTone(t, { f: 150 * r, f2: 65, dur: 0.16, gain: 0.5, lp: 600 });
-                    sfxNoiseBurst(t, { dur: 0.07, f: 1000 * r, q: 0.9, gain: 0.22 });
-                    sfxTone(t + 0.045, { f: 95 * r, f2: 60, dur: 0.12, gain: 0.22, lp: 400 }); break;
-                case 'stone':
-                    sfxNoiseBurst(t, { dur: 0.05, f: 2600 * r, q: 1.2, gain: 0.2 });
-                    sfxTone(t, { f: 820 * r, f2: 640 * r, dur: 0.12, gain: 0.1, type: 'triangle', lp: 2500 });
-                    sfxTone(t, { f: 130 * r, f2: 80, dur: 0.1, gain: 0.3, lp: 500 }); break;
-                case 'flesh': sfxTone(t, { f: 110 * r, f2: 48, dur: 0.17, gain: 0.5, lp: 450 }); sfxNoiseBurst(t, { dur: 0.1, f: 380 * r, q: 0.6, gain: 0.25, type: 'lowpass' }); break;
-                case 'hurt': sfxTone(t, { f: 90 * r, f2: 45, dur: 0.22, gain: 0.55, lp: 350 }); sfxNoiseBurst(t, { dur: 0.15, f: 300, q: 0.6, gain: 0.2, type: 'lowpass' }); break;
-                case 'dooropen':
-                    sfxTone(t, { f: 95 * r, f2: 150 * r, dur: 0.38, gain: 0.11, type: 'sawtooth', lp: 380, atk: 0.08 });
-                    sfxNoiseBurst(t, { dur: 0.3, f: 700, f2: 450, q: 2, gain: 0.07, atk: 0.1 });
-                    sfxNoiseBurst(t, { dur: 0.03, f: 1800, q: 1.5, gain: 0.1 }); break;
-                case 'doorclose':
-                    sfxTone(t + 0.22, { f: 120 * r, f2: 50, dur: 0.18, gain: 0.5, lp: 400 });
-                    sfxNoiseBurst(t + 0.22, { dur: 0.08, f: 500, q: 0.7, gain: 0.2, type: 'lowpass' });
-                    sfxTone(t, { f: 150 * r, f2: 100, dur: 0.22, gain: 0.03, type: 'sawtooth', lp: 320, atk: 0.07 }); break;
-                case 'step': sfxNoiseBurst(t, { dur: 0.11, f: 1300 * r, f2: 800, q: 0.6, gain: 0.12, atk: 0.025 }); sfxNoiseBurst(t + 0.02, { dur: 0.08, f: 3200 * r, q: 0.5, gain: 0.03, atk: 0.02 }); break; // тихое шуршание травы
-                case 'place': sfxTone(t, { f: 130 * r, f2: 70, dur: 0.14, gain: 0.4, lp: 500 }); sfxNoiseBurst(t, { dur: 0.06, f: 1200, q: 0.8, gain: 0.15 }); break;
+                case 'swing': // короткий «вжих»: узкий шум с быстрым подъёмом частоты
+                    sfxNoiseBurst(t, { dur: 0.16, f: 700 * r, f2: 2600 * r, q: 2.2, gain: 0.32, atk: 0.05 }); break;
+                case 'chop': // топор по дереву: резкий щелчок + звонкое деревянное «тук» (несколько затухающих тонов)
+                    sfxNoiseBurst(t, { dur: 0.025, f: 3200 * r, q: 0.7, gain: 0.55, atk: 0.001, type: 'highpass' });
+                    sfxModal(t, [170 * r, 330 * r, 590 * r, 910 * r], 0.14, 0.45);
+                    sfxNoiseBurst(t + 0.01, { dur: 0.09, f: 1100 * r, q: 1.4, gain: 0.25, atk: 0.002 });
+                    sfxTone(t, { f: 110 * r, f2: 62, dur: 0.11, gain: 0.35, atk: 0.002 }); break;
+                case 'stone': // кирка по камню: сухой удар + металлический звон
+                    sfxNoiseBurst(t, { dur: 0.03, f: 4200 * r, q: 0.6, gain: 0.6, atk: 0.001, type: 'highpass' });
+                    sfxModal(t, [1450 * r, 2310 * r, 3380 * r, 4720 * r], 0.12, 0.2);
+                    sfxNoiseBurst(t + 0.005, { dur: 0.1, f: 1800 * r, q: 0.9, gain: 0.25, atk: 0.002 });
+                    sfxTone(t, { f: 140 * r, f2: 70, dur: 0.09, gain: 0.3, atk: 0.002 }); break;
+                case 'flesh': // удар по телу: глухой хлопок + мокрый шлепок
+                    sfxTone(t, { f: 95 * r, f2: 42, dur: 0.16, gain: 0.7, atk: 0.002 });
+                    sfxNoiseBurst(t, { dur: 0.07, f: 1500 * r, q: 0.9, gain: 0.4, atk: 0.001 });
+                    sfxNoiseBurst(t, { dur: 0.14, f: 420, q: 0.6, gain: 0.35, atk: 0.002, type: 'lowpass' }); break;
+                case 'hurt': sfxTone(t, { f: 80 * r, f2: 38, dur: 0.24, gain: 0.8, atk: 0.002 }); sfxNoiseBurst(t, { dur: 0.1, f: 1200, q: 0.8, gain: 0.35, atk: 0.001 }); sfxNoiseBurst(t, { dur: 0.2, f: 350, q: 0.6, gain: 0.35, type: 'lowpass' }); break;
+                case 'dooropen': { // скрип петли: пила с «дрожью» высоты через узкий резонанс
+                    const o = sfxCtx.createOscillator(); o.type = 'sawtooth';
+                    const f0 = 210 * r; o.frequency.setValueAtTime(f0, t); o.frequency.linearRampToValueAtTime(f0 * 1.55, t + 0.22); o.frequency.linearRampToValueAtTime(f0 * 1.2, t + 0.42);
+                    const lfo = sfxCtx.createOscillator(), lg = sfxCtx.createGain(); lfo.frequency.value = 34; lg.gain.value = 9; lfo.connect(lg); lg.connect(o.frequency);
+                    const bp = sfxCtx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 7; bp.frequency.setValueAtTime(900 * r, t); bp.frequency.linearRampToValueAtTime(1500 * r, t + 0.25); bp.frequency.linearRampToValueAtTime(1100 * r, t + 0.44);
+                    const g = sfxCtx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.28, t + 0.08); g.gain.setValueAtTime(0.28, t + 0.3); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.46);
+                    o.connect(bp); bp.connect(g); g.connect(sfxOut); o.start(t); lfo.start(t); o.stop(t + 0.5); lfo.stop(t + 0.5);
+                    sfxNoiseBurst(t, { dur: 0.02, f: 2200, q: 1, gain: 0.35, atk: 0.001, type: 'highpass' }); // щелчок засова
+                    break; }
+                case 'doorclose': // хлопок деревянной двери + щелчок
+                    sfxNoiseBurst(t + 0.02, { dur: 0.03, f: 2600, q: 0.7, gain: 0.5, atk: 0.001, type: 'highpass' });
+                    sfxModal(t + 0.02, [120 * r, 240 * r, 430 * r], 0.22, 0.32);
+                    sfxTone(t + 0.02, { f: 80 * r, f2: 45, dur: 0.18, gain: 0.3, atk: 0.002 });
+                    sfxNoiseBurst(t + 0.16, { dur: 0.02, f: 2000, q: 1, gain: 0.3, atk: 0.001, type: 'highpass' }); break;
+                case 'step': // шаг по траве: сухой шорох (высокие частоты, быстрая атака) + едва слышный глухой топ
+                    sfxNoiseBurst(t, { dur: 0.09, f: 3600 * r, f2: 2200, q: 0.5, gain: 0.26, atk: 0.008, type: 'highpass' });
+                    sfxNoiseBurst(t + 0.015, { dur: 0.1, f: 1700 * r, q: 0.5, gain: 0.16, atk: 0.015 });
+                    sfxTone(t, { f: 85 * r, f2: 55, dur: 0.07, gain: 0.1, atk: 0.004 }); break;
+                case 'place': sfxModal(t, [150 * r, 300 * r, 520 * r], 0.12, 0.4); sfxNoiseBurst(t, { dur: 0.03, f: 3000, q: 0.7, gain: 0.4, atk: 0.001, type: 'highpass' }); break;
             }
         }
         import * as THREE from 'three';
@@ -4205,11 +4223,14 @@
             }
             updateUI();
         }
+        const plBackupKey = () => 'nw_pl_' + GAME_SERVER + '_' + worldId + '_' + (localStorage.getItem('nw_tok') || '').slice(0, 12);
         function tryApplySavedPlayer() { // вызывается, когда мир уже загружен (у хозяина и у остальных)
             if (!peer || !peer.isWS || !role) return;
             if (playerSyncWorld !== worldId) { // только первый вход в этот мир за сессию; при переподключении ничего не откатываем
                 playerSyncWorld = worldId;
-                if (peer.pdata && typeof peer.pdata === 'object') { try { applySavedPlayer(peer.pdata); } catch (e) { console.error('applySavedPlayer', e); } }
+                let rec = (peer.pdata && typeof peer.pdata === 'object') ? peer.pdata : null;
+                if (!rec) { try { const b = JSON.parse(localStorage.getItem(plBackupKey()) || 'null'); if (b && typeof b === 'object' && Date.now() - (b.at || 0) < 30 * 24 * 3600 * 1000) rec = b; } catch (_) {} } // сервер «забыл» игрока (стёр данные) — берём копию с устройства
+                if (rec) { try { applySavedPlayer(rec); } catch (e) { console.error('applySavedPlayer', e); } }
             }
             playerSyncReady = true; lastPinvJson = '';
         }
@@ -4222,6 +4243,7 @@
             if (!force && key === lastPinvJson && now - lastPinvAt < 30000) return;
             lastPinvJson = key; lastPinvAt = now;
             peer.sendRaw(rec);
+            try { const o = Object.assign({}, rec); delete o.k; o.at = Date.now(); localStorage.setItem(plBackupKey(), JSON.stringify(o)); } catch (_) {} // запасная копия на устройстве
         }
         setInterval(() => sendPlayerData(false), 2000);
         document.addEventListener('visibilitychange', () => { if (document.hidden) sendPlayerData(true); });
