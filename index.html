@@ -3150,15 +3150,14 @@
             try {
                 const call = async (path) => { const r = await fetch(SERVER_HTTP + path, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ name, pass, tok: PLAYER_TOKEN }), signal: ctl.signal }); const j = await r.json().catch(() => ({})); return { r, j }; };
                 let { r, j } = await call(accMode === 'register' ? '/register' : '/login');
-                if (accMode === 'register' && j.err === 'taken') { const t = await call('/login'); if (t.r.ok && t.j.ok) { r = t.r; j = t.j; } } // имя занято — вдруг это наш же аккаунт (например, после перезапуска сервера)
-                else if (accMode === 'login' && accRecover && j.err === 'bad') { const t = await call('/register'); if (t.r.ok && t.j.ok) { r = t.r; j = t.j; } else if (t.j.err === 'taken') j = { err: 'bad' }; } // сервера точно забыл аккаунт — создаём заново с тем же ключом, постройки останутся твоими
+                if (accMode === 'login' && accRecover && j.err === 'bad') { const t = await call('/register'); if (t.r.ok && t.j.ok) { r = t.r; j = t.j; } else if (t.j.err === 'taken') j = { err: 'bad' }; } // сервера точно забыл аккаунт — создаём заново с тем же ключом, постройки останутся твоими
                 if (r.ok && j.ok && typeof j.tok === 'string') {
                     PLAYER_TOKEN = j.tok; account = { name: cleanNick(j.name) };
                     try { localStorage.setItem('nw_tok', j.tok); localStorage.setItem('nw_acc', JSON.stringify(account)); localStorage.setItem('nw_cred', JSON.stringify({ name, pass })); } catch (e) {} // имя и пароль помним на этом устройстве, чтобы сам заходил заново после перезапуска сервера
                     accPassEl.value = ''; accErrEl.textContent = ''; accRecover = false;
                     refreshAccountUI();
                 } else {
-                    const errs = { taken: 'Аккаунт с таким именем уже есть — придумай другое имя', bad: 'Неверное имя или пароль', rate: 'Слишком много попыток — подожди немного', name: 'Имя — от 3 до 15 символов', pass: 'Пароль — от 4 символов' };
+                    const errs = { taken: 'Такое имя уже занято. Если это твой аккаунт — нажми «Войти в аккаунт» ниже; если нет — придумай другое имя', bad: 'Неверное имя или пароль', rate: 'Слишком много попыток — подожди немного', name: 'Имя — от 3 до 15 символов', pass: 'Пароль — от 4 символов' };
                     accErrEl.textContent = errs[j.err] || 'Ошибка сервера, попробуй ещё раз';
                 }
             } catch (e) { accErrEl.textContent = 'Нет связи с сервером. Подожди минуту (он мог спать) и попробуй снова'; }

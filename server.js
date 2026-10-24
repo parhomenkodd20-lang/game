@@ -352,24 +352,31 @@ const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods
 // Аккаунты: имя + пароль. У аккаунта есть секретный токен — им игрок заходит в мир с любого устройства (id игрока считается от токена,
 // поэтому постройки, двери, инвентарь и место выхода «идут» за аккаунтом). Пароль храним только в виде хеша (scrypt + соль).
 // ---------------------------------------------------------------------
-const accByName = new Map(); // имя в нижнем регистре -> { name, salt, hash, tok, created }
+// Ключ имени для проверки «такое уже есть»: без регистра, пробелов, _ - . и невидимых символов, а русские буквы-двойники
+// (а, е, о, р, с, у, х, к, м, т, в, н) приравнены к латинским. Поэтому «Вася», «вася», «В а с я» и «Bася» — одно и то же имя.
+const HOMO = { 'а': 'a', 'в': 'b', 'е': 'e', 'ё': 'e', 'з': '3', 'к': 'k', 'м': 'm', 'н': 'h', 'о': 'o', 'р': 'p', 'с': 'c', 'т': 't', 'у': 'y', 'х': 'x', 'і': 'i', 'ј': 'j', 'ѕ': 's' };
+function nameKey(n) {
+    const s = String(n).normalize('NFKC').toLowerCase().replace(/[\u200b-\u200f\u2060\ufeff\u00ad]/g, '').replace(/[\s._-]+/g, '');
+    return Array.from(s).map(ch => HOMO[ch] || ch).join('');
+}
+const accByName = new Map(); // ключ имени (nameKey) -> { name, salt, hash, tok, created }
 const accByTok = new Map();
 async function loadAccounts() {
     const d = await store.load('accounts');
     accByName.clear(); accByTok.clear();
-    if (d && Array.isArray(d.list)) for (const a of d.list) if (a && typeof a.name === 'string' && typeof a.tok === 'string') { accByName.set(a.name.toLowerCase(), a); accByTok.set(a.tok, a); }
+    if (d && Array.isArray(d.list)) for (const a of d.list) if (a && typeof a.name === 'string' && typeof a.tok === 'string') { const k = nameKey(a.name); if (accByName.has(k)) console.warn('Двойник имени в базе: «' + a.name + '» совпадает с «' + accByName.get(k).name + '» — войти по имени можно только в первый, второй пока работает по ключу'); else accByName.set(k, a); accByTok.set(a.tok, a); }
     console.log('Аккаунтов: ' + accByName.size);
 }
 let accSaving = Promise.resolve();
 function saveAccounts() {
-    accSaving = accSaving.then(() => store.save('accounts', { v: 1, list: [...accByName.values()] })).catch(e => console.error('save accounts', e.message));
+    accSaving = accSaving.then(() => store.save('accounts', { v: 1, list: [...accByTok.values()] })).catch(e => console.error('save accounts', e.message));
     return accSaving;
 }
 // Главный админ: аккаунт создаётся/обновляется при каждом запуске сервера (хранится только хеш пароля, не сам пароль).
 // Имя занято навсегда — зарегистрировать такое же никто не сможет.
 const ADMIN_NAME = 'cap_ukapka', ADMIN_SALT = 'e51aaa991235e1933769493c7d10800f', ADMIN_HASH = '208bf4394e2921e18c349a758a002cfe68c2e978d05924600cc16d76050e0743';
 async function seedAdmin() {
-    const key = ADMIN_NAME.toLowerCase();
+    const key = nameKey(ADMIN_NAME);
     let a = accByName.get(key), changed = false;
     if (!a) { a = { name: ADMIN_NAME, salt: ADMIN_SALT, hash: ADMIN_HASH, tok: crypto.randomBytes(20).toString('hex'), created: Date.now(), admin: true }; accByName.set(key, a); accByTok.set(a.tok, a); changed = true; }
     else if (a.salt !== ADMIN_SALT || a.hash !== ADMIN_HASH || a.admin !== true || a.name !== ADMIN_NAME) { a.salt = ADMIN_SALT; a.hash = ADMIN_HASH; a.admin = true; a.name = ADMIN_NAME; changed = true; }
@@ -396,7 +403,7 @@ function handleAuth(req, res, kind) {
             const name = cleanNick(raw), pass = typeof b.pass === 'string' ? b.pass : '';
             if (name.length < 3 || Array.from(raw).length > 15 || name !== raw.replace(/\s+/g, ' ')) return sendJson(res, 400, { err: 'name' });
             if (pass.length < 4 || pass.length > 64) return sendJson(res, 400, { err: 'pass' });
-            const key = name.toLowerCase();
+            const key = nameKey(name);
             if (kind === 'register') {
                 if (rlCount('r' + ip, 3600000) >= 5) return sendJson(res, 429, { err: 'rate' });
                 if (accByName.has(key)) return sendJson(res, 409, { err: 'taken' });
