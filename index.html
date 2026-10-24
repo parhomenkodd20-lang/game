@@ -691,9 +691,9 @@
 
         // Пресеты графики (сохраняются на устройстве). 1 — для слабых ПК, 2 — как раньше, 3 — больше теней и красоты.
         const GFX = { // дальность прорисовки от графики НЕ зависит — это отдельная настройка
-            1: { name: 'Низкая',  pr: 0.75, shadows: false, soft: false, follow: false, hemi: 0,   ambMul: 1,   fogMul: 2.3, sky: false, grade: false, grassCap: 700,  grassR: 32, grassDens: 0.18 },
-            2: { name: 'Средняя', pr: 1,    shadows: true,  soft: false, follow: false, hemi: 0,   ambMul: 1,   fogMul: 1,   sky: false, grade: false, grassCap: 2600, grassR: 64, grassDens: 0.3 },
-            3: { name: 'Высокая', pr: Math.min(window.devicePixelRatio || 1, 2), shadows: true, soft: true, follow: true, hemi: 0.2, ambMul: 0.7, fogMul: 0.85, sky: true, grade: true, grassCap: 4000, grassR: 80, grassDens: 0.5 }
+            1: { name: 'Низкая',  pr: 0.75, shadows: false, soft: false, follow: false, hemi: 0,   ambMul: 1,   fogMul: 2.3, stars: false, grade: false, grassCap: 700,  grassR: 32, grassDens: 0.18 },
+            2: { name: 'Средняя', pr: 1,    shadows: true,  soft: false, follow: false, hemi: 0,   ambMul: 1,   fogMul: 1,   stars: false, grade: false, grassCap: 2600, grassR: 64, grassDens: 0.3 },
+            3: { name: 'Высокая', pr: Math.min(window.devicePixelRatio || 1, 2), shadows: true, soft: true, follow: true, hemi: 0.2, ambMul: 0.7, fogMul: 0.85, stars: true, grade: true, grassCap: 4000, grassR: 80, grassDens: 0.5 }
         };
         let gfx = GFX[2];
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
@@ -740,20 +740,107 @@
         const SUN_SUNSET_COLOR = new THREE.Color(0xff8a4c);
         const MOON_COLOR = new THREE.Color(0x93a8ff);
         const tmpSkyColor = new THREE.Color();
-        const SKY_ZENITH = new THREE.Color(0x2c6bd1);
+        const SKY_NIGHT_HIGH = new THREE.Color(0x050b1e); // на высокой ночное небо глубокого тёмно-синего цвета, а не чёрное
         const tmpSunColor = new THREE.Color();
         const tmpDir = new THREE.Vector3();
 
-        // Градиентное небо (только на высокой графике): купол, всегда «на бесконечности», цвет от горизонта к зениту
-        const skyDome = new THREE.Mesh(new THREE.SphereGeometry(1, 24, 14), new THREE.ShaderMaterial({
-            uniforms: { top: { value: new THREE.Color(0x4a8fe0) }, horizon: { value: new THREE.Color(0x87CEEB) } },
-            vertexShader: 'varying vec3 vDir; void main(){ vDir = position; vec4 p = projectionMatrix * mat4(mat3(modelViewMatrix)) * vec4(position, 1.0); gl_Position = p.xyww; }',
-            fragmentShader: 'uniform vec3 top; uniform vec3 horizon; varying vec3 vDir; void main(){ float h = clamp(normalize(vDir).y, 0.0, 1.0); gl_FragColor = vec4(mix(horizon, top, pow(h, 0.55)), 1.0); }',
-            side: THREE.BackSide, depthWrite: false, fog: false
-        }));
-        skyDome.frustumCulled = false; skyDome.renderOrder = -100; skyDome.visible = false;
-        scene.add(skyDome);
-        function setSkyDome(on) { skyDome.visible = !!on; }
+        // Ночные красоты (только на высокой графике): звёзды с мерцанием и млечным путём, падающие звёзды, светлячки у земли
+        const nightFx = { time: 0 };
+        const starGeo = (() => {
+            const N = 2200, pos = new Float32Array(N * 3), size = new Float32Array(N), ph = new Float32Array(N), tint = new Float32Array(N);
+            const rnd = (() => { let x = 12345; return () => (x = (x * 1664525 + 1013904223) >>> 0) / 4294967296; })(); // одно и то же небо у всех
+            const gauss = () => (rnd() + rnd() + rnd() + rnd() - 2) * 0.9;
+            const axis = new THREE.Vector3(0.35, 0.8, 0.5).normalize(), u = new THREE.Vector3(1, 0, 0).cross(axis).normalize(), v = axis.clone().cross(u);
+            for (let i = 0; i < N; i++) {
+                let d;
+                if (i < 700) { // млечный путь: звёзды гуще вдоль большого круга
+                    const a = rnd() * Math.PI * 2, off = gauss() * 0.16;
+                    d = u.clone().multiplyScalar(Math.cos(a)).addScaledVector(v, Math.sin(a)).addScaledVector(axis, off).normalize();
+                    size[i] = 0.7 + rnd() * 1.1;
+                } else {
+                    const z = rnd() * 2 - 1, a = rnd() * Math.PI * 2, r = Math.sqrt(1 - z * z);
+                    d = new THREE.Vector3(r * Math.cos(a), z, r * Math.sin(a));
+                    size[i] = 0.8 + Math.pow(rnd(), 3) * 2.6; // редкие яркие звёзды
+                }
+                pos.set([d.x, d.y, d.z], i * 3); ph[i] = rnd() * 6.28; tint[i] = rnd();
+            }
+            const g = new THREE.BufferGeometry();
+            g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setAttribute('aSize', new THREE.BufferAttribute(size, 1));
+            g.setAttribute('aPhase', new THREE.BufferAttribute(ph, 1)); g.setAttribute('aTint', new THREE.BufferAttribute(tint, 1));
+            return g;
+        })();
+        const starMat = new THREE.ShaderMaterial({
+            uniforms: { uTime: { value: 0 }, uNight: { value: 0 }, uPx: { value: 1 } },
+            vertexShader: 'attribute float aSize; attribute float aPhase; attribute float aTint; uniform float uTime; uniform float uPx; varying float vA; varying float vT; void main(){ vec4 p = projectionMatrix * mat4(mat3(modelViewMatrix)) * vec4(position, 1.0); gl_Position = p.xyww; float tw = 0.72 + 0.28 * sin(uTime * (0.9 + aTint * 1.7) + aPhase); vA = tw; vT = aTint; gl_PointSize = aSize * uPx * (0.85 + 0.3 * tw); }',
+            fragmentShader: 'uniform float uNight; varying float vA; varying float vT; void main(){ float d = length(gl_PointCoord - 0.5); float a = smoothstep(0.5, 0.05, d) * uNight * vA; vec3 c = mix(vec3(0.7, 0.8, 1.0), vec3(1.0, 0.92, 0.75), vT); gl_FragColor = vec4(c * a, a); }',
+            transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: false
+        });
+        const stars = new THREE.Points(starGeo, starMat); stars.frustumCulled = false; stars.renderOrder = -50; stars.visible = false; scene.add(stars);
+        // падающая звезда: тонкий след, который быстро гаснет
+        const SHOOT_PTS = 14, shootGeo = new THREE.BufferGeometry();
+        shootGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(SHOOT_PTS * 3), 3)); shootGeo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(SHOOT_PTS * 3), 3));
+        const shootLine = new THREE.Line(shootGeo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+        shootLine.frustumCulled = false; shootLine.visible = false; shootLine.renderOrder = -49; scene.add(shootLine);
+        const shoot = { t: -1, wait: 6, start: new THREE.Vector3(), tan: new THREE.Vector3(), ang: 0, len: 0.2 };
+        // светлячки: тёплые огоньки, которые дрейфуют у земли вокруг игрока
+        const FF_N = 46, ffBase = [];
+        for (let i = 0; i < FF_N; i++) ffBase.push({ x: Math.random() * 60, z: Math.random() * 60, vx: (Math.random() - 0.5) * 0.7, vz: (Math.random() - 0.5) * 0.7, ph: Math.random() * 6.28, hy: Math.random() });
+        const ffGeo = new THREE.BufferGeometry();
+        ffGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(FF_N * 3), 3)); ffGeo.setAttribute('aPhase', new THREE.BufferAttribute(new Float32Array(ffBase.map(f => f.ph)), 1));
+        const ffMat = new THREE.ShaderMaterial({
+            uniforms: { uTime: { value: 0 }, uNight: { value: 0 }, uPx: { value: 1 } },
+            vertexShader: 'attribute float aPhase; uniform float uTime; uniform float uPx; varying float vA; void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_Position = projectionMatrix * mv; float b = pow(0.5 + 0.5 * sin(uTime * 1.6 + aPhase * 3.0), 2.0); vA = 0.25 + 0.75 * b; gl_PointSize = clamp(70.0 / max(1.0, -mv.z), 2.0, 9.0) * uPx; }',
+            fragmentShader: 'uniform float uNight; varying float vA; void main(){ float d = length(gl_PointCoord - 0.5); float a = smoothstep(0.5, 0.0, d) * vA * uNight; gl_FragColor = vec4(vec3(0.85, 1.0, 0.45) * a, a); }',
+            transparent: true, blending: THREE.AdditiveBlending, depthWrite: false
+        });
+        const fireflies = new THREE.Points(ffGeo, ffMat); fireflies.frustumCulled = false; fireflies.visible = false; scene.add(fireflies);
+        function updateNightFx(dt, nightK, dayProgressNight) { // nightK 0..1 — насколько сейчас ночь
+            nightFx.time += dt;
+            torchLight.intensity = 3.2 * (gfx.stars ? 1 + 0.07 * Math.sin(nightFx.time * 13) + 0.05 * Math.sin(nightFx.time * 23.7) : 1); // на высокой пламя факела живо мерцает
+            const on = gfx.stars && nightK > 0.01;
+            stars.visible = on; fireflies.visible = on && nightK > 0.3;
+            if (!on) { shootLine.visible = false; return; }
+            const px = renderer.getPixelRatio();
+            starMat.uniforms.uTime.value = nightFx.time; starMat.uniforms.uNight.value = nightK; starMat.uniforms.uPx.value = px;
+            stars.rotation.set(0.5, dayProgressNight * 0.9, 0.2); // за ночь небо чуть поворачивается
+            // светлячки
+            ffMat.uniforms.uTime.value = nightFx.time; ffMat.uniforms.uNight.value = nightK; ffMat.uniforms.uPx.value = px;
+            const R = 30, cx = camera.position.x, cz = camera.position.z, arr = ffGeo.attributes.position.array;
+            for (let i = 0; i < FF_N; i++) {
+                const f = ffBase[i];
+                const x = cx + ((f.x + nightFx.time * f.vx - cx) % (2 * R) + 3 * R) % (2 * R) - R, z = cz + ((f.z + nightFx.time * f.vz - cz) % (2 * R) + 3 * R) % (2 * R) - R;
+                const onLand = Math.hypot(x, z) < BEACH_START - 6;
+                arr[i * 3] = x; arr[i * 3 + 1] = onLand ? getTerrainHeight(x, z) + 0.5 + f.hy * 1.6 + 0.3 * Math.sin(nightFx.time * 0.8 + f.ph) : -500; arr[i * 3 + 2] = z;
+            }
+            ffGeo.attributes.position.needsUpdate = true;
+            // падающая звезда: раз в 8–22 секунды
+            if (shoot.t < 0) {
+                shoot.wait -= dt;
+                if (shoot.wait <= 0 && nightK > 0.6) {
+                    const az = Math.random() * Math.PI * 2, el = 0.45 + Math.random() * 0.8;
+                    shoot.start.set(Math.cos(az) * Math.cos(el), Math.sin(el), Math.sin(az) * Math.cos(el));
+                    const r = new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5);
+                    shoot.tan.copy(r).addScaledVector(shoot.start, -r.dot(shoot.start)).normalize();
+                    shoot.t = 0; shoot.ang = 0; shoot.len = 0.16 + Math.random() * 0.12; shoot.wait = 8 + Math.random() * 14;
+                }
+            }
+            if (shoot.t >= 0) {
+                shoot.t += dt; const T = 0.9, k = shoot.t / T;
+                if (k >= 1) { shoot.t = -1; shootLine.visible = false; }
+                else {
+                    shootLine.visible = true;
+                    const head = k * 0.9, Rr = Math.min(360, camera.far * 0.9);
+                    const P = shootGeo.attributes.position.array, C = shootGeo.attributes.color.array, fade = Math.sin(k * Math.PI);
+                    for (let i = 0; i < SHOOT_PTS; i++) {
+                        const a = head - shoot.len * (1 - i / (SHOOT_PTS - 1));
+                        const c = Math.cos(a), sn = Math.sin(a);
+                        P[i * 3] = camera.position.x + (shoot.start.x * c + shoot.tan.x * sn) * Rr; P[i * 3 + 1] = camera.position.y + (shoot.start.y * c + shoot.tan.y * sn) * Rr; P[i * 3 + 2] = camera.position.z + (shoot.start.z * c + shoot.tan.z * sn) * Rr;
+                        const w = Math.pow(i / (SHOOT_PTS - 1), 2) * fade; C[i * 3] = w; C[i * 3 + 1] = w * 0.95; C[i * 3 + 2] = w * 0.85;
+                    }
+                    shootGeo.attributes.position.needsUpdate = true; shootGeo.attributes.color.needsUpdate = true;
+                }
+            } else shootLine.visible = false;
+        }
         // Мягкая цветокоррекция и виньетка (только на высокой графике): лёгкий контраст и насыщенность, чуть темнее по краям кадра
         const vignetteEl = document.createElement('div');
         vignetteEl.style.cssText = 'position:fixed;inset:0;z-index:3;pointer-events:none;display:none;background:radial-gradient(ellipse at center, rgba(0,0,0,0) 58%, rgba(0,0,0,0.30) 100%);';
@@ -796,7 +883,7 @@
             sunMesh.userData.coreMat.opacity = sunAlpha;
             sunMesh.userData.glowMat.opacity = sunMesh.userData.baseGlowOpacity * sunAlpha;
             moonMesh.userData.coreMat.opacity = moonAlpha;
-            moonMesh.userData.glowMat.opacity = moonMesh.userData.baseGlowOpacity * moonAlpha;
+            moonMesh.userData.glowMat.opacity = moonMesh.userData.baseGlowOpacity * moonAlpha * (gfx.stars ? 1.8 : 1);
 
             if (isDay) {
                 const sunsetFactor = Math.max(0, 1 - elevation / 0.3);
@@ -813,15 +900,16 @@
                 skyLight.intensity = THREE.MathUtils.lerp(0.035, 0.14, elevation); // тусклый лунный свет
                 skyLight.color.copy(MOON_COLOR);
                 ambientLight.intensity = THREE.MathUtils.lerp(0.012, 0.045, elevation); // ночь заметно темнее
-                tmpSkyColor.copy(SKY_NIGHT);
+                tmpSkyColor.copy(gfx.stars ? SKY_NIGHT_HIGH : SKY_NIGHT);
+            }
+            { // сколько сейчас «ночи» (для звёзд и светлячков): с заката плавно нарастает, к рассвету гаснет
+                let nightK = 0, nProg = 0;
+                if (isDay) { if (cycleTime > DAY_LENGTH - 20) nightK = (cycleTime - (DAY_LENGTH - 20)) / 20 * 0.4; }
+                else { nProg = (cycleTime - DAY_LENGTH) / NIGHT_LENGTH; nightK = Math.min(1, Math.sin(nProg * Math.PI) * 3); }
+                updateNightFx(dt, nightK, nProg);
             }
             hemiLight.intensity = gfx.hemi * (ambientLight.intensity / 0.6); // отражённый свет гаснет вместе с дневным
-            ambientLight.intensity *= gfx.ambMul;                              // на высокой часть общего света заменена небесным/земным отражением — яркость та же, но объём лучше
-            if (skyDome.visible) { // градиентное небо: у горизонта цвет тумана (чтобы не было шва), к зениту глубже
-                skyDome.material.uniforms.horizon.value.copy(tmpSkyColor);
-                const dayK = isDay ? THREE.MathUtils.clamp(elevation * 2, 0, 1) : 0;
-                skyDome.material.uniforms.top.value.copy(tmpSkyColor).lerp(SKY_ZENITH, 0.6 * dayK).multiplyScalar(isDay ? 1 : 0.85);
-            }
+            if (isDay) ambientLight.intensity *= gfx.ambMul;                              // на высокой часть общего света заменена небесным/земным отражением — яркость та же, но объём лучше
             scene.background = tmpSkyColor.clone();
             scene.fog.color.copy(tmpSkyColor);
         }
@@ -891,7 +979,7 @@
         torchHandle.position.set(0, 0, 0); torchHandle.castShadow = true; torchGroup.add(torchHandle);
         const torchTip = new THREE.Mesh(new THREE.IcosahedronGeometry(0.16, 0), new THREE.MeshStandardMaterial({ color: 0xffeb3b, roughness: 0.5, metalness: 0.05, emissive: 0xff9800, emissiveIntensity: 0.6 }));
         torchTip.position.set(0, 0.34, 0); torchTip.castShadow = true; torchGroup.add(torchTip);
-        const torchLight = new THREE.PointLight(0xffb347, 5.4, 58, 1.4); // светит заметно дальше, чем раньше
+        const torchLight = new THREE.PointLight(0xffb347, 3.2, 95, 1.1); // мягче вблизи, но светит заметно дальше
         torchLight.position.set(0, 0.34, 0);
         torchGroup.add(torchLight);
         rightArm.add(torchGroup);
@@ -3383,7 +3471,8 @@
             sh.camera.updateProjectionMatrix();
             if (sh.map) { sh.map.dispose(); sh.map = null; }
             renderer.toneMapping = THREE.NoToneMapping; // яркость остаётся прежней на всех уровнях
-            setSkyDome(gfx.sky); setGrade(gfx.grade);
+            setGrade(gfx.grade);
+            moonMesh.scale.setScalar(gfx.stars ? 1.35 : 1);
             scene.traverse(o => { if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => { m.needsUpdate = true; }); }); // материалам нужно пересчитаться под новые тени и тонкую настройку цвета
             applyDrawDistance(); grassCX = 1e9; // трава перерисуется по новым настройкам
             markShadowReceivers();
