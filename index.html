@@ -690,10 +690,10 @@
         document.body.appendChild(renderer.domElement);
 
         // Пресеты графики (сохраняются на устройстве). 1 — для слабых ПК, 2 — как раньше, 3 — больше теней и красоты.
-        const GFX = {
-            1: { name: 'Низкая',  pr: 0.75, shadows: false, soft: false, follow: false, hemi: 0,    tone: false, grassCap: 700,  grassR: 32, grassDens: 0.18, maxDist: 300 },
-            2: { name: 'Средняя', pr: 1,    shadows: true,  soft: false, follow: false, hemi: 0,    tone: false, grassCap: 2600, grassR: 64, grassDens: 0.3,  maxDist: 1000 },
-            3: { name: 'Высокая', pr: Math.min(window.devicePixelRatio || 1, 2), shadows: true, soft: true, follow: true, hemi: 0.45, tone: true, grassCap: 4000, grassR: 80, grassDens: 0.5, maxDist: 1000 }
+        const GFX = { // дальность прорисовки от графики НЕ зависит — это отдельная настройка
+            1: { name: 'Низкая',  pr: 0.75, shadows: false, soft: false, follow: false, hemi: 0,   ambMul: 1,   fogMul: 2.3, sky: false, grade: false, grassCap: 700,  grassR: 32, grassDens: 0.18 },
+            2: { name: 'Средняя', pr: 1,    shadows: true,  soft: false, follow: false, hemi: 0,   ambMul: 1,   fogMul: 1,   sky: false, grade: false, grassCap: 2600, grassR: 64, grassDens: 0.3 },
+            3: { name: 'Высокая', pr: Math.min(window.devicePixelRatio || 1, 2), shadows: true, soft: true, follow: true, hemi: 0.2, ambMul: 0.7, fogMul: 0.85, sky: true, grade: true, grassCap: 4000, grassR: 80, grassDens: 0.5 }
         };
         let gfx = GFX[2];
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
@@ -740,8 +740,25 @@
         const SUN_SUNSET_COLOR = new THREE.Color(0xff8a4c);
         const MOON_COLOR = new THREE.Color(0x93a8ff);
         const tmpSkyColor = new THREE.Color();
+        const SKY_ZENITH = new THREE.Color(0x2c6bd1);
         const tmpSunColor = new THREE.Color();
         const tmpDir = new THREE.Vector3();
+
+        // Градиентное небо (только на высокой графике): купол, всегда «на бесконечности», цвет от горизонта к зениту
+        const skyDome = new THREE.Mesh(new THREE.SphereGeometry(1, 24, 14), new THREE.ShaderMaterial({
+            uniforms: { top: { value: new THREE.Color(0x4a8fe0) }, horizon: { value: new THREE.Color(0x87CEEB) } },
+            vertexShader: 'varying vec3 vDir; void main(){ vDir = position; vec4 p = projectionMatrix * mat4(mat3(modelViewMatrix)) * vec4(position, 1.0); gl_Position = p.xyww; }',
+            fragmentShader: 'uniform vec3 top; uniform vec3 horizon; varying vec3 vDir; void main(){ float h = clamp(normalize(vDir).y, 0.0, 1.0); gl_FragColor = vec4(mix(horizon, top, pow(h, 0.55)), 1.0); }',
+            side: THREE.BackSide, depthWrite: false, fog: false
+        }));
+        skyDome.frustumCulled = false; skyDome.renderOrder = -100; skyDome.visible = false;
+        scene.add(skyDome);
+        function setSkyDome(on) { skyDome.visible = !!on; }
+        // Мягкая цветокоррекция и виньетка (только на высокой графике): лёгкий контраст и насыщенность, чуть темнее по краям кадра
+        const vignetteEl = document.createElement('div');
+        vignetteEl.style.cssText = 'position:fixed;inset:0;z-index:3;pointer-events:none;display:none;background:radial-gradient(ellipse at center, rgba(0,0,0,0) 58%, rgba(0,0,0,0.30) 100%);';
+        document.body.appendChild(vignetteEl);
+        function setGrade(on) { renderer.domElement.style.filter = on ? 'contrast(1.06) saturate(1.1)' : ''; vignetteEl.style.display = on ? 'block' : 'none'; }
 
         function updateDayNightCycle(dt) {
             cycleTime = (((Date.now() / 1000 - cycleBase) % CYCLE_LENGTH) + CYCLE_LENGTH) % CYCLE_LENGTH; // общее для комнаты время суток
@@ -799,6 +816,12 @@
                 tmpSkyColor.copy(SKY_NIGHT);
             }
             hemiLight.intensity = gfx.hemi * (ambientLight.intensity / 0.6); // отражённый свет гаснет вместе с дневным
+            ambientLight.intensity *= gfx.ambMul;                              // на высокой часть общего света заменена небесным/земным отражением — яркость та же, но объём лучше
+            if (skyDome.visible) { // градиентное небо: у горизонта цвет тумана (чтобы не было шва), к зениту глубже
+                skyDome.material.uniforms.horizon.value.copy(tmpSkyColor);
+                const dayK = isDay ? THREE.MathUtils.clamp(elevation * 2, 0, 1) : 0;
+                skyDome.material.uniforms.top.value.copy(tmpSkyColor).lerp(SKY_ZENITH, 0.6 * dayK).multiplyScalar(isDay ? 1 : 0.85);
+            }
             scene.background = tmpSkyColor.clone();
             scene.fog.color.copy(tmpSkyColor);
         }
@@ -3027,7 +3050,7 @@
         }
         function accountLogout() {
             account = null;
-            try { localStorage.removeItem('nw_acc'); localStorage.removeItem('nw_tok'); } catch (e) {}
+            try { localStorage.removeItem('nw_acc'); localStorage.removeItem('nw_tok'); localStorage.removeItem('nw_cred'); } catch (e) {}
             PLAYER_TOKEN = Array.from(crypto.getRandomValues(new Uint8Array(20)), b => b.toString(16).padStart(2, '0')).join('');
         }
         async function accSubmit() {
@@ -3043,7 +3066,7 @@
                 else if (accMode === 'login' && accRecover && j.err === 'bad') { const t = await call('/register'); if (t.r.ok && t.j.ok) { r = t.r; j = t.j; } else if (t.j.err === 'taken') j = { err: 'bad' }; } // сервера точно забыл аккаунт — создаём заново с тем же ключом, постройки останутся твоими
                 if (r.ok && j.ok && typeof j.tok === 'string') {
                     PLAYER_TOKEN = j.tok; account = { name: cleanNick(j.name) };
-                    try { localStorage.setItem('nw_tok', j.tok); localStorage.setItem('nw_acc', JSON.stringify(account)); } catch (e) {}
+                    try { localStorage.setItem('nw_tok', j.tok); localStorage.setItem('nw_acc', JSON.stringify(account)); localStorage.setItem('nw_cred', JSON.stringify({ name, pass })); } catch (e) {} // имя и пароль помним на этом устройстве, чтобы сам заходил заново после перезапуска сервера
                     accPassEl.value = ''; accErrEl.textContent = ''; accRecover = false;
                     refreshAccountUI();
                 } else {
@@ -3339,9 +3362,9 @@
         } catch (e) {}
         const saveSettings = () => { try { localStorage.setItem('nw_settings', JSON.stringify(settings)); } catch (e) {} };
         function applyDrawDistance() {
-            const d = Math.min(settings.dist, gfx.maxDist); // на низкой графике дальше 300 м не рисуем
+            const d = settings.dist; // дальность прорисовки — отдельная настройка, графика её не меняет
             camera.far = d; camera.updateProjectionMatrix();
-            scene.fog.density = Math.max(0.0028, 2.4 / d); // туман скрывает край прорисовки
+            scene.fog.density = Math.max(0.0028, 2.4 / d) * gfx.fogMul; // туман скрывает край прорисовки; на низкой графике гуще — вдали всё размыто дымкой
             grassRadius = Math.min(gfx.grassR, d * 0.4);
         }
         function applyGraphics(level) {
@@ -3359,9 +3382,9 @@
             }
             sh.camera.updateProjectionMatrix();
             if (sh.map) { sh.map.dispose(); sh.map = null; }
-            renderer.toneMapping = gfx.tone ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping; renderer.toneMappingExposure = 1.15;
+            renderer.toneMapping = THREE.NoToneMapping; // яркость остаётся прежней на всех уровнях
+            setSkyDome(gfx.sky); setGrade(gfx.grade);
             scene.traverse(o => { if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => { m.needsUpdate = true; }); }); // материалам нужно пересчитаться под новые тени и тонкую настройку цвета
-            if (!gfx.follow) hemiLight.intensity = 0;
             applyDrawDistance(); grassCX = 1e9; // трава перерисуется по новым настройкам
             markShadowReceivers();
         }
@@ -4895,8 +4918,31 @@
         document.getElementById('net-solo-btn').addEventListener('click', playSolo);
 
         const FATAL_NET = ['replaced', 'full', 'no-world', 'bad-token', 'no-account'];
+        let silentTries = 0;
+        async function silentRecover(cred) { // сервер забыл вход (перезапуск): входим сами тем же именем и паролем и продолжаем, без возврата на экран аккаунта
+            silentTries++; restarting = true; netGen++; teardownNetwork();
+            netStage = 'восстанавливаю вход в аккаунт…';
+            const call = async (path) => { const r = await fetch(SERVER_HTTP + path, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ name: cred.name, pass: cred.pass, tok: PLAYER_TOKEN }) }); return { r, j: await r.json().catch(() => ({})) }; };
+            try {
+                let t = await call('/login');
+                if (!(t.r.ok && t.j.ok) && t.j.err === 'bad') t = await call('/register'); // аккаунта правда нет — создаём заново с тем же личным ключом, постройки остаются твоими
+                if (t.r.ok && t.j.ok && typeof t.j.tok === 'string') {
+                    PLAYER_TOKEN = t.j.tok;
+                    try { localStorage.setItem('nw_tok', t.j.tok); } catch (e) {}
+                    startNetwork(); return;
+                }
+            } catch (e) {}
+            kickToAccountScreen();
+        }
+        function kickToAccountScreen() {
+            try { sessionStorage.setItem('nw_accmsg', 'Сервер перезапускался и потерял вход. Введи то же имя и пароль — зайдёшь в свой мир.'); } catch (e) {}
+            try { localStorage.setItem('nw_lastname', account ? account.name : ''); localStorage.removeItem('nw_acc'); } catch (e) {}
+            location.reload();
+        }
         function fatalNetError(type) {
-            if (type === 'no-account') { // сервер не знает этот аккаунт (например, база сервера обнулилась): просим войти заново
+            if (type === 'no-account') { // сервер не знает этот аккаунт (например, база сервера обнулилась)
+                let cred = null; try { cred = JSON.parse(localStorage.getItem('nw_cred') || 'null'); } catch (e) {}
+                if (cred && typeof cred.name === 'string' && typeof cred.pass === 'string' && silentTries < 3) { silentRecover(cred); return; }
                 try { sessionStorage.setItem('nw_accmsg', 'Сервер перезапускался и потерял вход. Введи то же имя и пароль — зайдёшь в свой мир.'); } catch (e) {}
                 try { localStorage.setItem('nw_lastname', account ? account.name : ''); localStorage.removeItem('nw_acc'); } catch (e) {} // токен оставляем: введёшь тот же пароль — вернёшься в свой мир со своими постройками
                 location.reload(); return;
