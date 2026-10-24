@@ -259,6 +259,8 @@
             <div class="pause-row">Графика: <b id="pause-gfx-val">Средняя</b></div>
             <input type="range" id="pause-gfx" min="1" max="4" step="1" value="2" style="width:100%;">
             <div id="pause-gfx-labels"><span>Низкая</span><span>Средняя</span><span>Высокая</span><span class="gfx-soon">Ультра</span></div>
+            <div class="pause-row">Громкость звуков: <b id="pause-vol-val">60</b>%</div>
+            <input type="range" id="pause-vol" min="0" max="100" step="5" value="60" style="width:100%;">
             <div class="pause-row">Дальность прорисовки: <b id="pause-dist-val">1000</b></div>
             <input type="range" id="pause-dist" min="100" max="1000" step="25" value="1000" style="width:100%;">
             <label class="pause-check"><input type="checkbox" id="pause-fps"> Показывать FPS</label>
@@ -345,6 +347,76 @@
     </script>
 
     <script type="module">
+        // ---------- ЗВУКИ: всё синтезируется на лету (файлов нет). Тихо, мягко, без резких пиков ----------
+        var sfxCtx = null, sfxMaster = null, sfxNoise = null, sfxVol = 0.6, sfxLast = {}, sfxCam = null;
+        try { const j = JSON.parse(localStorage.getItem('nw_settings') || '{}'); if (typeof j.vol === 'number') sfxVol = Math.max(0, Math.min(1, j.vol)); } catch (e) {}
+        function sfxInit() {
+            if (sfxCtx) { if (sfxCtx.state === 'suspended') sfxCtx.resume().catch(() => {}); return !!sfxMaster; }
+            try {
+                const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return false;
+                sfxCtx = new AC();
+                const comp = sfxCtx.createDynamicsCompressor(); comp.threshold.value = -24; comp.knee.value = 24; comp.ratio.value = 6; comp.attack.value = 0.005; comp.release.value = 0.2;
+                const lp = sfxCtx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 6500; lp.Q.value = 0.5; // срезает «свистящие» высокие — уши не устают
+                sfxMaster = sfxCtx.createGain(); sfxMaster.gain.value = sfxVol * 0.55;
+                sfxMaster.connect(lp); lp.connect(comp); comp.connect(sfxCtx.destination);
+                const len = sfxCtx.sampleRate * 2, buf = sfxCtx.createBuffer(1, len, sfxCtx.sampleRate), d = buf.getChannelData(0);
+                let b0 = 0; for (let i = 0; i < len; i++) { const w = Math.random() * 2 - 1; b0 = 0.97 * b0 + 0.03 * w; d[i] = (w * 0.5 + b0 * 6) * 0.5; } // чуть «розовый» шум, мягче белого
+                sfxNoise = buf;
+                return true;
+            } catch (e) { sfxCtx = null; sfxMaster = null; return false; }
+        }
+        function sfxSetVol(v) { sfxVol = v; if (sfxMaster) sfxMaster.gain.value = v * 0.55; }
+        ['pointerdown', 'keydown', 'mousedown'].forEach(ev => window.addEventListener(ev, () => { sfxInit(); }, { passive: true }));
+        function sfxNoiseBurst(t0, o) { // o: dur, f, f2, q, gain, atk, type
+            const src = sfxCtx.createBufferSource(); src.buffer = sfxNoise; src.loop = true;
+            const flt = sfxCtx.createBiquadFilter(); flt.type = o.type || 'bandpass'; flt.Q.value = o.q || 0.8;
+            flt.frequency.setValueAtTime(o.f, t0); if (o.f2) flt.frequency.exponentialRampToValueAtTime(o.f2, t0 + o.dur);
+            const g = sfxCtx.createGain(), atk = o.atk || 0.006;
+            g.gain.setValueAtTime(0.0001, t0); g.gain.linearRampToValueAtTime(o.gain, t0 + atk); g.gain.exponentialRampToValueAtTime(0.0001, t0 + o.dur);
+            src.connect(flt); flt.connect(g); g.connect(sfxOut);
+            src.start(t0, Math.random() * 1.5); src.stop(t0 + o.dur + 0.05);
+        }
+        function sfxTone(t0, o) { // o: f, f2, dur, gain, type, atk
+            const osc = sfxCtx.createOscillator(); osc.type = o.type || 'sine';
+            osc.frequency.setValueAtTime(o.f, t0); if (o.f2) osc.frequency.exponentialRampToValueAtTime(o.f2, t0 + o.dur);
+            const g = sfxCtx.createGain(), atk = o.atk || 0.005;
+            g.gain.setValueAtTime(0.0001, t0); g.gain.linearRampToValueAtTime(o.gain, t0 + atk); g.gain.exponentialRampToValueAtTime(0.0001, t0 + o.dur);
+            if (o.lp) { const f = sfxCtx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = o.lp; osc.connect(f); f.connect(g); } else osc.connect(g);
+            g.connect(sfxOut); osc.start(t0); osc.stop(t0 + o.dur + 0.05);
+        }
+        var sfxOut = null;
+        // name: swing | chop | stone | flesh | hurt | dooropen | doorclose | step | place ; pos — необязательно {x,y,z} (чем дальше, тем тише)
+        function sfx(name, pos, vol) {
+            if (sfxVol <= 0 || !sfxInit() || !sfxCtx || sfxCtx.state !== 'running') return;
+            let k = vol == null ? 1 : vol;
+            if (pos && sfxCam) { const d = Math.hypot(pos.x - sfxCam.x, pos.y - sfxCam.y, pos.z - sfxCam.z); if (d > 45) return; k *= Math.pow(1 - d / 45, 1.5); if (k < 0.02) return; }
+            const now = sfxCtx.currentTime; if (sfxLast[name] && now - sfxLast[name] < 0.04) return; sfxLast[name] = now; // не больше одного такого звука за 40 мс
+            const out = sfxCtx.createGain(); out.gain.value = k; out.connect(sfxMaster); sfxOut = out;
+            const t = now + 0.005, r = 0.92 + Math.random() * 0.16; // лёгкий разброс высоты — не звучит как копия
+            switch (name) {
+                case 'swing': sfxNoiseBurst(t, { dur: 0.2, f: 500 * r, f2: 1500 * r, q: 0.7, gain: 0.17, atk: 0.07 }); break;
+                case 'chop':
+                    sfxTone(t, { f: 150 * r, f2: 65, dur: 0.16, gain: 0.5, lp: 600 });
+                    sfxNoiseBurst(t, { dur: 0.07, f: 1000 * r, q: 0.9, gain: 0.22 });
+                    sfxTone(t + 0.045, { f: 95 * r, f2: 60, dur: 0.12, gain: 0.22, lp: 400 }); break;
+                case 'stone':
+                    sfxNoiseBurst(t, { dur: 0.05, f: 2600 * r, q: 1.2, gain: 0.2 });
+                    sfxTone(t, { f: 820 * r, f2: 640 * r, dur: 0.12, gain: 0.1, type: 'triangle', lp: 2500 });
+                    sfxTone(t, { f: 130 * r, f2: 80, dur: 0.1, gain: 0.3, lp: 500 }); break;
+                case 'flesh': sfxTone(t, { f: 110 * r, f2: 48, dur: 0.17, gain: 0.5, lp: 450 }); sfxNoiseBurst(t, { dur: 0.1, f: 380 * r, q: 0.6, gain: 0.25, type: 'lowpass' }); break;
+                case 'hurt': sfxTone(t, { f: 90 * r, f2: 45, dur: 0.22, gain: 0.55, lp: 350 }); sfxNoiseBurst(t, { dur: 0.15, f: 300, q: 0.6, gain: 0.2, type: 'lowpass' }); break;
+                case 'dooropen':
+                    sfxTone(t, { f: 95 * r, f2: 150 * r, dur: 0.38, gain: 0.11, type: 'sawtooth', lp: 380, atk: 0.08 });
+                    sfxNoiseBurst(t, { dur: 0.3, f: 700, f2: 450, q: 2, gain: 0.07, atk: 0.1 });
+                    sfxNoiseBurst(t, { dur: 0.03, f: 1800, q: 1.5, gain: 0.1 }); break;
+                case 'doorclose':
+                    sfxTone(t + 0.22, { f: 120 * r, f2: 50, dur: 0.18, gain: 0.5, lp: 400 });
+                    sfxNoiseBurst(t + 0.22, { dur: 0.08, f: 500, q: 0.7, gain: 0.2, type: 'lowpass' });
+                    sfxTone(t, { f: 150 * r, f2: 100, dur: 0.22, gain: 0.03, type: 'sawtooth', lp: 320, atk: 0.07 }); break;
+                case 'step': sfxNoiseBurst(t, { dur: 0.11, f: 1300 * r, f2: 800, q: 0.6, gain: 0.12, atk: 0.025 }); sfxNoiseBurst(t + 0.02, { dur: 0.08, f: 3200 * r, q: 0.5, gain: 0.03, atk: 0.02 }); break; // тихое шуршание травы
+                case 'place': sfxTone(t, { f: 130 * r, f2: 70, dur: 0.14, gain: 0.4, lp: 500 }); sfxNoiseBurst(t, { dur: 0.06, f: 1200, q: 0.8, gain: 0.15 }); break;
+            }
+        }
         import * as THREE from 'three';
         import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 
@@ -1472,7 +1544,8 @@
             return g;
         }
         function doorAt(w) { for (const d of doors.values()) if (samePos(d, w)) return d; return null; }
-        function setDoorOpen(d, open) {
+        function setDoorOpen(d, open, silent) {
+            if (!silent && d.open !== !!open && d.mesh) sfx(open ? 'dooropen' : 'doorclose', d.mesh.position);
             d.open = !!open;
             const i = colliders.indexOf(d.collider);
             if (d.open && i >= 0) colliders.splice(i, 1);
@@ -1494,7 +1567,7 @@
             doors.set(m.id, d);
             colliders.push(collider);
             if (m.locked) setDoorLocked(d, m.owner);
-            if (m.open) { setDoorOpen(d, true); d.angle = DOOR_OPEN_ANGLE; d.pivot.rotation.y = d.angle; }
+            if (m.open) { setDoorOpen(d, true, true); d.angle = DOOR_OPEN_ANGLE; d.pivot.rotation.y = d.angle; }
         }
         const DOOR_OPEN_ANGLE = -Math.PI / 2;
         function updateDoors(dt) {
@@ -3076,6 +3149,7 @@
             if (r.obj.userData.hitCount >= RESOURCE_HP) { destroyResource(id); return; }
             if (shake) {
                 const o = r.obj;
+                sfx(o.userData.isTree ? 'chop' : 'stone', o.position);
                 o.position.x += (Math.random()-0.5)*0.3;
                 o.position.z += (Math.random()-0.5)*0.3;
                 setTimeout(() => { o.position.x = o.userData.basePos.x; o.position.z = o.userData.basePos.z; }, 80);
@@ -3085,7 +3159,7 @@
         // --- УПРАВЛЕНИЕ ---
         const controls = new PointerLockControls(camera, document.body);
         const keys = { w: false, a: false, s: false, d: false };
-        let velY = 0, canJump = false;
+        let velY = 0, canJump = false, stepAcc = 0;
         const raycaster = new THREE.Raycaster();
         const center = new THREE.Vector2(0, 0);
 
@@ -3213,6 +3287,7 @@
             const isTool = currentItem && ITEMS[currentItem.type] && ITEMS[currentItem.type].isTool;
             gameState.isAttacking = true; gameState.attackTime = 0; gameState.attackCooldown = 0.35;
             netSend({ t: 'swing' }); // остальные увидят взмах
+            if (isTool) sfx('swing');
             if (!isTool) return;
 
             raycaster.setFromCamera(center, camera);
@@ -3264,6 +3339,7 @@
             }
 
             netSend({ t: 'hit', id: targetObj.userData.netId, hits: targetObj.userData.hitCount });
+            setTimeout(() => sfx(treeRoot ? 'chop' : 'stone'), 70);
 
             if (targetObj.userData.hitCount >= RESOURCE_HP) destroyResource(targetObj.userData.netId);
         }
@@ -3440,12 +3516,13 @@
 
         // ---------- настройки: дальность прорисовки, FPS, пинг ----------
         // Все настройки (кроме админских) хранятся в самом браузере — привязаны к устройству, а не к аккаунту
-        const settings = { dist: 1000, fps: false, ping: false, gfx: 2 };
+        const settings = { dist: 1000, fps: false, ping: false, gfx: 2, vol: sfxVol };
         try {
             const j = JSON.parse(localStorage.getItem('nw_settings') || sessionStorage.getItem('game_settings') || '{}');
             if (typeof j.dist === 'number') settings.dist = THREE.MathUtils.clamp(j.dist, 100, 1000);
             settings.fps = !!j.fps; settings.ping = !!j.ping;
             if (j.gfx === 1 || j.gfx === 2 || j.gfx === 3) settings.gfx = j.gfx;
+            if (typeof j.vol === 'number') settings.vol = Math.max(0, Math.min(1, j.vol));
         } catch (e) {}
         const saveSettings = () => { try { localStorage.setItem('nw_settings', JSON.stringify(settings)); } catch (e) {} };
         function applyDrawDistance() {
@@ -3512,6 +3589,9 @@
             }
             settings.gfx = v; gfxVal.textContent = GFX[v].name; applyGraphics(v); saveSettings();
         });
+        const volInput = document.getElementById('pause-vol'), volVal = document.getElementById('pause-vol-val');
+        volInput.value = Math.round(settings.vol * 100); volVal.textContent = Math.round(settings.vol * 100);
+        volInput.addEventListener('input', () => { settings.vol = parseInt(volInput.value, 10) / 100; volVal.textContent = volInput.value; sfxSetVol(settings.vol); saveSettings(); sfx('chop'); });
         applyGraphics(settings.gfx); // тени, разрешение, трава и дальность по сохранённой графике (счётчики FPS/пинга обновит perfLoop)
         distInput.addEventListener('input', () => { settings.dist = parseInt(distInput.value, 10); distVal.textContent = settings.dist; applyDrawDistance(); saveSettings(); });
         fpsBox.addEventListener('change', () => { settings.fps = fpsBox.checked; saveSettings(); refreshPerf(); });
@@ -4000,11 +4080,13 @@
         updateHpUI();
 
         function flashDamage() {
+            sfx('hurt');
             dmgFlashEl.style.transition = 'none'; dmgFlashEl.style.opacity = '1';
             void dmgFlashEl.offsetWidth;
             dmgFlashEl.style.transition = 'opacity 0.5s'; dmgFlashEl.style.opacity = '0';
         }
         function flashHitMarker(head) {
+            sfx('flesh');
             crosshairEl.classList.add('hit'); crosshairEl.textContent = head ? '✕' : '+';
             clearTimeout(hitTimer);
             hitTimer = setTimeout(() => { crosshairEl.classList.remove('hit'); crosshairEl.textContent = '+'; }, 180);
@@ -5571,6 +5653,8 @@
                 if(camera.position.y < groundH) { camera.position.y = groundH; velY = 0; canJump = true; }
                 if (adm.noclip) { camera.position.y = Math.max(ncY, getTerrainHeight(camera.position.x, camera.position.z) - 40); velY = 0; canJump = true; }
                 const isMoving = keys.w || keys.s || keys.a || keys.d;
+                if (isMoving && canJump && !frozen && !adm.noclip) { stepAcc += dt; if (stepAcc > 0.46 / (speed / 9)) { stepAcc = 0; sfx('step'); } } else stepAcc = 0.3;
+                sfxCam = camera.position;
                 if (isMoving && canJump) {
                     viewModel.position.y = Math.sin(time * 0.012) * 0.02;
                     viewModel.position.x = Math.cos(time * 0.006) * 0.015;

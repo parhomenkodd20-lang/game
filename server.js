@@ -406,7 +406,12 @@ function handleAuth(req, res, kind) {
             const key = nameKey(name);
             if (kind === 'register') {
                 if (rlCount('r' + ip, 3600000) >= 5) return sendJson(res, 429, { err: 'rate' });
-                if (accByName.has(key)) return sendJson(res, 409, { err: 'taken' });
+                const ex = accByName.get(key);
+                if (ex) { // имя занято: если пароль тот же — это просто вход в свой аккаунт, иначе отказ
+                    const h = Buffer.from(hashPass(pass, ex.salt), 'hex'), a = Buffer.from(ex.hash, 'hex');
+                    if (h.length === a.length && crypto.timingSafeEqual(h, a)) return sendJson(res, 200, { ok: true, name: ex.name, tok: ex.tok });
+                    return sendJson(res, 409, { err: 'taken' });
+                }
                 // токен этого устройства (если ещё ничей) становится токеном аккаунта — тогда прежние постройки и вещи останутся за игроком
                 const tok = (typeof b.tok === 'string' && /^[A-Za-z0-9_-]{16,64}$/.test(b.tok) && !accByTok.has(b.tok)) ? b.tok : crypto.randomBytes(20).toString('hex');
                 const salt = crypto.randomBytes(16).toString('hex');
