@@ -228,7 +228,14 @@ function leaveWorld(c) {
     c.world = null;
     if (wasHost) {
         w.host = null;
-        for (const o of w.players.values()) if (o.attached) { o.attached = false; o.send({ k: 'close' }); } // игроки сами переподключатся, кто-то станет новым хозяином
+        // Хозяин мог просто моргнуть (обрыв связи, обновление страницы): 8 секунд держим игроков подключёнными и ждём, что он вернётся.
+        // Так один обрыв не заставляет переподключаться всех подряд (раньше из-за этого мир «мигал», а медведи исчезали).
+        if (w.hostGrace) clearTimeout(w.hostGrace.timer);
+        w.hostGrace = { id: c.id, timer: setTimeout(() => {
+            w.hostGrace = null;
+            if (w.host) return;
+            for (const o of w.players.values()) if (o.attached) { o.attached = false; o.send({ k: 'close' }); } // не вернулся — игроки переподключатся, кто-то станет новым хозяином
+        }, 8000) };
         persistNow(w);
         console.log('[' + w.id + '] хозяин вышел, игроков осталось ' + w.players.size);
     } else if (wasAttached) {
@@ -249,13 +256,19 @@ function handleMessage(c, m) {
         const old = w.players.get(id);
         if (old) { old.send({ k: 'err', type: 'replaced' }); old.kill(); } // тот же игрок зашёл с другой вкладки/после обрыва — старое соединение закрываем
         if (w.players.size >= MAX_PLAYERS) { c.send({ k: 'err', type: 'full' }); return; }
+        let reclaim = false;
         if (m.host) {
             if (w.host) { c.send({ k: 'err', type: 'unavailable-id' }); return; } // хозяин уже есть
+            if (w.hostGrace) {
+                if (w.hostGrace.id !== id) { c.send({ k: 'err', type: 'unavailable-id' }); return; } // место хозяина ждёт прежнего хозяина
+                clearTimeout(w.hostGrace.timer); w.hostGrace = null; reclaim = true;
+            }
             w.host = c; c.isHost = true;
         }
         c.world = w; c.id = id; c.accName = acc.name; c.admin = acc.admin === true; w.players.set(c.id, c);
         c.send({ k: 'open', id: c.id, world: c.isHost ? w.saved : undefined, pdata: w.pdata[c.id] || undefined, admin: c.admin || undefined });
-        if (c.isHost) console.log('[' + w.id + '] новый хозяин, сохранение: ' + (w.saved ? 'есть' : 'нет'));
+        if (c.isHost) console.log('[' + w.id + '] ' + (reclaim ? 'хозяин вернулся, игроки не переподключались' : 'новый хозяин') + ', сохранение: ' + (w.saved ? 'есть' : 'нет'));
+        if (reclaim) for (const o of w.players.values()) if (o !== c && o.attached) c.send({ k: 'conn', pid: o.id }); // возвращаем хозяину список подключённых игроков
         return;
     }
     const w = c.world;
