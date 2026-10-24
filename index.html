@@ -359,6 +359,12 @@
                 const lp = sfxCtx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 9500; lp.Q.value = 0.4; // срезает только самый «писк»
                 sfxMaster = sfxCtx.createGain(); sfxMaster.gain.value = sfxVol * 0.7;
                 sfxMaster.connect(lp); lp.connect(comp); comp.connect(sfxCtx.destination);
+                { // лёгкое эхо «живого воздуха»: без него синтетические звуки звучат сухо и плоско
+                    const n = Math.floor(sfxCtx.sampleRate * 0.7), ir = sfxCtx.createBuffer(2, n, sfxCtx.sampleRate);
+                    for (let ch = 0; ch < 2; ch++) { const d = ir.getChannelData(ch); for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / n, 3.2); }
+                    const cv = sfxCtx.createConvolver(); cv.buffer = ir; const wet = sfxCtx.createGain(); wet.gain.value = 0.16;
+                    lp.connect(cv); cv.connect(wet); wet.connect(comp);
+                }
                 const len = sfxCtx.sampleRate * 2, buf = sfxCtx.createBuffer(1, len, sfxCtx.sampleRate), d = buf.getChannelData(0);
                 let b0 = 0; for (let i = 0; i < len; i++) { const w = Math.random() * 2 - 1; b0 = 0.97 * b0 + 0.03 * w; d[i] = (w * 0.8 + b0 * 2) * 0.6; } // почти белый шум с лёгким «телом»
                 sfxNoise = buf;
@@ -392,7 +398,7 @@
         function sfx(name, pos, vol) {
             if (sfxVol <= 0 || !sfxInit() || !sfxCtx || sfxCtx.state !== 'running') return;
             let k = vol == null ? 1 : vol;
-            if (pos && sfxCam) { const d = Math.hypot(pos.x - sfxCam.x, pos.y - sfxCam.y, pos.z - sfxCam.z); if (d > 45) return; k *= Math.pow(1 - d / 45, 1.5); if (k < 0.02) return; }
+            if (pos && sfxCam) { const R = name === 'roar' ? 90 : 45, d = Math.hypot(pos.x - sfxCam.x, pos.y - sfxCam.y, pos.z - sfxCam.z); if (d > R) return; k *= Math.pow(1 - d / R, 1.3); if (k < 0.02) return; }
             const now = sfxCtx.currentTime; if (sfxLast[name] && now - sfxLast[name] < 0.04) return; sfxLast[name] = now; // не больше одного такого звука за 40 мс
             const out = sfxCtx.createGain(); out.gain.value = k; out.connect(sfxMaster); sfxOut = out;
             const t = now + 0.005, r = 0.92 + Math.random() * 0.16; // лёгкий разброс высоты — не звучит как копия
@@ -432,6 +438,20 @@
                     sfxNoiseBurst(t, { dur: 0.09, f: 3600 * r, f2: 2200, q: 0.5, gain: 0.26, atk: 0.008, type: 'highpass' });
                     sfxNoiseBurst(t + 0.015, { dur: 0.1, f: 1700 * r, q: 0.5, gain: 0.16, atk: 0.015 });
                     sfxTone(t, { f: 85 * r, f2: 55, dur: 0.07, gain: 0.1, atk: 0.004 }); break;
+                case 'roar': { // рычание медведя: низкий «рваный» голос (пила с быстрой дрожью громкости) через два формантных фильтра + дыхание
+                    const dur = 1.0, o = sfxCtx.createOscillator(); o.type = 'sawtooth';
+                    o.frequency.setValueAtTime(95 * r, t); o.frequency.linearRampToValueAtTime(130 * r, t + 0.18); o.frequency.exponentialRampToValueAtTime(58 * r, t + dur);
+                    const o2 = sfxCtx.createOscillator(); o2.type = 'square'; o2.frequency.setValueAtTime(47 * r, t); o2.frequency.exponentialRampToValueAtTime(29 * r, t + dur);
+                    const am = sfxCtx.createOscillator(), amg = sfxCtx.createGain(), vg = sfxCtx.createGain(); am.frequency.setValueAtTime(26, t); am.frequency.linearRampToValueAtTime(15, t + dur); am.type = 'sawtooth';
+                    amg.gain.value = 0.45; am.connect(amg); amg.connect(vg.gain); vg.gain.value = 0.55; // громкость «дрожит» ~20 раз в секунду — звериное «рррр»
+                    const f1 = sfxCtx.createBiquadFilter(); f1.type = 'bandpass'; f1.Q.value = 3.5; f1.frequency.setValueAtTime(420, t); f1.frequency.linearRampToValueAtTime(300, t + dur);
+                    const f2 = sfxCtx.createBiquadFilter(); f2.type = 'bandpass'; f2.Q.value = 4; f2.frequency.setValueAtTime(1050, t); f2.frequency.linearRampToValueAtTime(720, t + dur);
+                    const mix = sfxCtx.createGain(), env = sfxCtx.createGain(); mix.gain.value = 1;
+                    env.gain.setValueAtTime(0.0001, t); env.gain.linearRampToValueAtTime(0.85, t + 0.06); env.gain.setValueAtTime(0.85, t + 0.5); env.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+                    const lo = sfxCtx.createGain(); lo.gain.value = 0.55;
+                    o.connect(vg); o2.connect(lo); lo.connect(vg); vg.connect(f1); vg.connect(f2); f1.connect(mix); f2.connect(mix); mix.connect(env); env.connect(sfxOut);
+                    o.start(t); o2.start(t); am.start(t); o.stop(t + dur + 0.05); o2.stop(t + dur + 0.05); am.stop(t + dur + 0.05);
+                    sfxNoiseBurst(t, { dur: 0.9, f: 700, f2: 450, q: 1.2, gain: 0.22, atk: 0.05 }); break; }
                 case 'place': sfxModal(t, [150 * r, 300 * r, 520 * r], 0.12, 0.4); sfxNoiseBurst(t, { dur: 0.03, f: 3000, q: 0.7, gain: 0.4, atk: 0.001, type: 'highpass' }); break;
             }
         }
@@ -2285,7 +2305,7 @@
                         }
                     } else if (d <= BEAR_REACH) {
                         b.rot += Math.max(-8 * dt, Math.min(8 * dt, angDiff(want, b.rot)));
-                        if (b.atkCd <= 0 && reachable && Math.abs(angDiff(want, b.rot)) < 1.1) b.windup = BEAR_WINDUP; // достал — бьёт сразу, дальше перезарядка
+                        if (b.atkCd <= 0 && reachable && Math.abs(angDiff(want, b.rot)) < 1.1) { b.windup = BEAR_WINDUP; sfx('roar', { x: b.x, y: camera.position.y, z: b.z }); } // достал — рычит и бьёт сразу, дальше перезарядка
                     } else bearWalkTo(b, t2.x, t2.z, b.hp <= BEAR_ENRAGE_HP ? BEAR_RUN_ENRAGED : BEAR_RUN, dt);
                     return;
                 }
@@ -2335,7 +2355,7 @@
                 seen.add(a[0]);
                 const b = bears.get(a[0]) || bearCreate(a[0], a[1], a[2], a[3], a[5]);
                 b.nx = a[1]; b.nz = a[2]; b.nrot = a[3]; b.aggro = !!a[4]; b.hp = a[5];
-                if (a[6] && !b.atkFlag) b.atkAnim = BEAR_WINDUP;
+                if (a[6] && !b.atkFlag) { b.atkAnim = BEAR_WINDUP; sfx('roar', { x: a[1], y: camera.position.y, z: a[2] }); }
                 b.atkFlag = a[6]; b.moving = !!a[7];
             });
             [...bears.values()].forEach(b => { if (!seen.has(b.id)) removeBear(b); });
@@ -4245,7 +4265,7 @@
             peer.sendRaw(rec);
             try { const o = Object.assign({}, rec); delete o.k; o.at = Date.now(); localStorage.setItem(plBackupKey(), JSON.stringify(o)); } catch (_) {} // запасная копия на устройстве
         }
-        setInterval(() => sendPlayerData(false), 2000);
+        setInterval(() => sendPlayerData(false), 2500);
         document.addEventListener('visibilitychange', () => { if (document.hidden) sendPlayerData(true); });
         mapCanvas.addEventListener('click', (e) => { // на карте смерти — клик по своему спальнику
             if (!dead) return;
@@ -5076,7 +5096,7 @@
                 const restore = p.savedWorld || readLocalWorldCache(); // сначала сохранение с сервера, а если сервер «забыл» мир — копия из этого браузера
                 if (restore) { handleNetMessage({ t: 'welcome', id, players: [], ...restore }); if (typeof restore.savedAt === 'number') worldCatchUp((Date.now() - restore.savedAt) / 1000); } // мир с прошлого раза: постройки, срубленные деревья… и пока он спал, всё гнило
                 lastSavedJson = '';
-                saveTicker = makeTicker(() => saveWorldNow(p), 10000);
+                saveTicker = makeTicker(() => saveWorldNow(p), 5000);
             }
             updateOnlineCount();
             tryApplySavedPlayer(); // хозяин: мир восстановлен — возвращаем свои вещи и место
@@ -5256,7 +5276,7 @@
             }
         }, 1000);
 
-        if (USE_WS) makeTicker(cacheWorldLocally, 10000);
+        if (USE_WS) makeTicker(cacheWorldLocally, 5000);
 
         // Закрыли вкладку — сразу закрываем соединения, чтобы остальные не ждали таймаут
         window.addEventListener('beforeunload', () => { try { sendPlayerData(true); } catch (_) {} try { saveWorldNow(peer); } catch (_) {} try { cacheWorldLocally(); } catch (_) {} try { if (peer) peer.destroy(); } catch (_) {} });
