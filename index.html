@@ -3006,7 +3006,7 @@
         const accPanelEl = document.getElementById('acc-panel'), accNameEl = document.getElementById('acc-name'), accPassEl = document.getElementById('acc-pass'),
               accErrEl = document.getElementById('acc-err'), accSubmitEl = document.getElementById('acc-submit'), accSwitchEl = document.getElementById('acc-switch'),
               accTitleEl = document.getElementById('acc-title');
-        let accMode = 'register';
+        let accMode = 'register', accRecover = false; // accRecover: сервер забыл аккаунт — пробуем войти, а если его правда нет, создаём заново с тем же личным ключом
         function setAccMode(mode) {
             accMode = mode; accErrEl.textContent = '';
             accTitleEl.textContent = mode === 'register' ? 'Создание аккаунта' : 'Вход в аккаунт';
@@ -3021,7 +3021,7 @@
             document.getElementById('menu-account').style.display = account && USE_WS ? 'flex' : 'none';
             document.getElementById('acc-label').textContent = account ? '👤 ' + account.name : '';
             if (!account) {
-                try { const msg = sessionStorage.getItem('nw_accmsg'); if (msg) { accErrEl.textContent = msg; sessionStorage.removeItem('nw_accmsg'); const ln = localStorage.getItem('nw_lastname'); if (ln) accNameEl.value = ln; setAccMode('register'); accErrEl.textContent = msg; } } catch (e) {}
+                try { const msg = sessionStorage.getItem('nw_accmsg'); if (msg) { accErrEl.textContent = msg; sessionStorage.removeItem('nw_accmsg'); const ln = localStorage.getItem('nw_lastname'); if (ln) accNameEl.value = ln; accRecover = true; setAccMode('login'); accErrEl.textContent = msg; } } catch (e) {}
                 setTimeout(() => { try { accNameEl.focus(); } catch (e) {} }, 50);
             }
         }
@@ -3037,12 +3037,14 @@
             accSubmitEl.disabled = true; accErrEl.textContent = 'Подключаюсь к серверу… (если он спал — до минуты)';
             const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 70000);
             try {
-                const r = await fetch(SERVER_HTTP + (accMode === 'register' ? '/register' : '/login'), { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ name, pass, tok: PLAYER_TOKEN }), signal: ctl.signal });
-                const j = await r.json().catch(() => ({}));
+                const call = async (path) => { const r = await fetch(SERVER_HTTP + path, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ name, pass, tok: PLAYER_TOKEN }), signal: ctl.signal }); const j = await r.json().catch(() => ({})); return { r, j }; };
+                let { r, j } = await call(accMode === 'register' ? '/register' : '/login');
+                if (accMode === 'register' && j.err === 'taken') { const t = await call('/login'); if (t.r.ok && t.j.ok) { r = t.r; j = t.j; } } // имя занято — вдруг это наш же аккаунт (например, после перезапуска сервера)
+                else if (accMode === 'login' && accRecover && j.err === 'bad') { const t = await call('/register'); if (t.r.ok && t.j.ok) { r = t.r; j = t.j; } else if (t.j.err === 'taken') j = { err: 'bad' }; } // сервера точно забыл аккаунт — создаём заново с тем же ключом, постройки останутся твоими
                 if (r.ok && j.ok && typeof j.tok === 'string') {
                     PLAYER_TOKEN = j.tok; account = { name: cleanNick(j.name) };
                     try { localStorage.setItem('nw_tok', j.tok); localStorage.setItem('nw_acc', JSON.stringify(account)); } catch (e) {}
-                    accPassEl.value = ''; accErrEl.textContent = '';
+                    accPassEl.value = ''; accErrEl.textContent = ''; accRecover = false;
                     refreshAccountUI();
                 } else {
                     const errs = { taken: 'Аккаунт с таким именем уже есть — придумай другое имя', bad: 'Неверное имя или пароль', rate: 'Слишком много попыток — подожди немного', name: 'Имя — от 3 до 15 символов', pass: 'Пароль — от 4 символов' };
@@ -4895,7 +4897,7 @@
         const FATAL_NET = ['replaced', 'full', 'no-world', 'bad-token', 'no-account'];
         function fatalNetError(type) {
             if (type === 'no-account') { // сервер не знает этот аккаунт (например, база сервера обнулилась): просим войти заново
-                try { sessionStorage.setItem('nw_accmsg', 'Сервер забыл твой аккаунт (он перезапускался). Введи то же имя и пароль и нажми «Создать аккаунт» — вернёшься в свой мир.'); } catch (e) {}
+                try { sessionStorage.setItem('nw_accmsg', 'Сервер перезапускался и потерял вход. Введи то же имя и пароль — зайдёшь в свой мир.'); } catch (e) {}
                 try { localStorage.setItem('nw_lastname', account ? account.name : ''); localStorage.removeItem('nw_acc'); } catch (e) {} // токен оставляем: введёшь тот же пароль — вернёшься в свой мир со своими постройками
                 location.reload(); return;
             }

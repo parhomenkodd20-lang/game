@@ -39,11 +39,19 @@ const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const store = {
     async load(id) {
         if (UPSTASH_URL && UPSTASH_TOKEN) {
-            try {
-                const r = await fetch(UPSTASH_URL, { method: 'POST', headers: { Authorization: 'Bearer ' + UPSTASH_TOKEN }, body: JSON.stringify(['GET', 'nw:' + id]) });
-                const j = await r.json();
-                if (j && typeof j.result === 'string') return JSON.parse(j.result);
-            } catch (e) { console.error('load upstash', id, e.message); }
+            // Ошибку базы НЕЛЬЗЯ принимать за «данных нет»: иначе пустой список перезапишет настоящие аккаунты и мир. Поэтому пробуем несколько раз, а потом сообщаем об ошибке.
+            let lastErr = null;
+            for (let i = 0; i < 4; i++) {
+                try {
+                    const r = await fetch(UPSTASH_URL, { method: 'POST', headers: { Authorization: 'Bearer ' + UPSTASH_TOKEN }, body: JSON.stringify(['GET', 'nw:' + id]) });
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    const j = await r.json();
+                    if (j && typeof j.result === 'string') return JSON.parse(j.result);
+                    if (j && j.result === null) { lastErr = null; break; } // ключа нет — это нормально (первый запуск)
+                    throw new Error('неожиданный ответ базы');
+                } catch (e) { lastErr = e; console.error('load upstash', id, e.message); await new Promise(r => setTimeout(r, 1000 * (i + 1))); }
+            }
+            if (lastErr) throw lastErr;
         }
         try { return JSON.parse(fs.readFileSync(path.join(DATA_DIR, id + '.json'), 'utf8')); } catch (_) { return null; }
     },
@@ -214,6 +222,7 @@ function leaveWorld(c) {
 function handleMessage(c, m) {
     if (!c.world) { // первое сообщение — приветствие
         if (m.k !== 'hello') return;
+        if (!storageReady) { c.send({ k: 'err', type: 'network' }); return; } // данные ещё грузятся — клиент подождёт и переподключится
         const w = worlds.get(String(m.world || 'w1'));
         if (!w) { c.send({ k: 'err', type: 'no-world' }); return; }
         if (typeof m.tok !== 'string' || !/^[A-Za-z0-9_-]{16,64}$/.test(m.tok)) { c.send({ k: 'err', type: 'bad-token' }); return; }
@@ -347,6 +356,7 @@ const accByName = new Map(); // имя в нижнем регистре -> { nam
 const accByTok = new Map();
 async function loadAccounts() {
     const d = await store.load('accounts');
+    accByName.clear(); accByTok.clear();
     if (d && Array.isArray(d.list)) for (const a of d.list) if (a && typeof a.name === 'string' && typeof a.tok === 'string') { accByName.set(a.name.toLowerCase(), a); accByTok.set(a.tok, a); }
     console.log('Аккаунтов: ' + accByName.size);
 }
@@ -377,6 +387,7 @@ function handleAuth(req, res, kind) {
     req.on('data', (c) => { body += c; if (body.length > 4096) { big = true; req.destroy(); } });
     req.on('end', async () => {
         if (big) return;
+        if (!storageReady) return sendJson(res, 503, { err: 'server' });
         try {
             let b; try { b = JSON.parse(body); } catch (_) { return sendJson(res, 400, { err: 'bad' }); }
             if (!b || typeof b !== 'object') return sendJson(res, 400, { err: 'bad' });
@@ -420,7 +431,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && (url === '/register' || url === '/login')) { handleAuth(req, res, url.slice(1)); return; }
     if (url === '/health') { // по этому адресу видно, где сервер хранит данные
         res.writeHead(200, { ...CORS, 'Content-Type': 'text/plain; charset=utf-8' });
-        res.end('ok\nхранилище: ' + ((UPSTASH_URL && UPSTASH_TOKEN) ? 'Upstash (данные переживут перезапуск)' : 'ТОЛЬКО ФАЙЛ — при перезапуске Render данные и аккаунты СТИРАЮТСЯ') + '\nаккаунтов: ' + accByName.size);
+        res.end('ok\nготов: ' + (storageReady ? 'да' : 'нет, хранилище ещё не загрузилось') + '\nхранилище: ' + ((UPSTASH_URL && UPSTASH_TOKEN) ? 'Upstash (данные переживут перезапуск)' : 'ТОЛЬКО ФАЙЛ — при перезапуске Render данные и аккаунты СТИРАЮТСЯ') + '\nаккаунтов: ' + accByName.size);
         return;
     }
     if (url === '/' || url === '/index.html') {
@@ -447,25 +458,42 @@ setInterval(() => {
 const SELF_URL = (process.env.RENDER_EXTERNAL_URL || '').replace(/\/$/, '');
 if (SELF_URL) setInterval(() => { fetch(SELF_URL + '/health').catch(() => {}); }, 10 * 60 * 1000);
 
+// Пока данные не загружены из хранилища (или оно временно не отвечает), сервер никого не пускает и ничего не сохраняет — так аккаунты и мир не затираются пустыми данными
+let storageReady = false, loadingNow = false;
+async function loadAll() {
+    if (storageReady || loadingNow) return;
+    loadingNow = true;
+    try {
+        await loadAccounts(); await seedAdmin();
+        for (const w of worlds.values()) {
+            w.saved = await store.load(w.id);
+            w.pdata = {};
+            const pl = await store.load(w.id + '_p');
+            if (pl && pl.players && typeof pl.players === 'object') {
+                const now = Date.now();
+                for (const [id, r] of Object.entries(pl.players)) if (r && typeof r.at === 'number' && now - r.at < PLAYER_KEEP_MS) w.pdata[id] = r;
+            }
+            console.log('[' + w.id + '] ' + w.name + ': сохранение ' + (w.saved ? 'загружено' : 'нет') + ', игроков в базе: ' + Object.keys(w.pdata).length);
+        }
+        storageReady = true;
+        console.log('Хранилище загружено, сервер принимает игроков');
+    } catch (e) {
+        console.error('Хранилище не загрузилось (' + e.message + '), повторю через 10 секунд; игроков пока не пускаю');
+        setTimeout(loadAll, 10000);
+    }
+    loadingNow = false;
+}
+
 async function main() {
     if (!(UPSTASH_URL && UPSTASH_TOKEN)) console.warn('ВНИМАНИЕ: Upstash не подключён — аккаунты и мир хранятся в файле и пропадут при перезапуске сервера на Render!');
-    for (const w of worlds.values()) {
-        if (w === [...worlds.values()][0]) { await loadAccounts(); await seedAdmin(); }
-        w.saved = await store.load(w.id);
-        const pl = await store.load(w.id + '_p');
-        if (pl && pl.players && typeof pl.players === 'object') {
-            const now = Date.now();
-            for (const [id, r] of Object.entries(pl.players)) if (r && typeof r.at === 'number' && now - r.at < PLAYER_KEEP_MS) w.pdata[id] = r;
-        }
-        console.log('[' + w.id + '] ' + w.name + ': сохранение ' + (w.saved ? 'загружено' : 'нет') + ', игроков в базе: ' + Object.keys(w.pdata).length);
-    }
+    await Promise.race([loadAll(), new Promise(r => setTimeout(r, 15000))]); // Render ждёт открытый порт — если база отвечает долго, открываем порт и догружаем в фоне
     server.listen(PORT, () => console.log('Игровой сервер запущен на порту ' + PORT + ' (миров: ' + worlds.size + ', до ' + MAX_PLAYERS + ' игроков в каждом)'));
 }
 main();
 
 async function shutdown() {
     console.log('Остановка: сохраняю миры…');
-    for (const w of worlds.values()) { try { await persistNow(w); } catch (_) {} }
+    if (storageReady) for (const w of worlds.values()) { try { await persistNow(w); } catch (_) {} }
     process.exit(0);
 }
 process.on('SIGTERM', shutdown);
