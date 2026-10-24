@@ -356,8 +356,8 @@
                 const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return false;
                 sfxCtx = new AC();
                 const comp = sfxCtx.createDynamicsCompressor(); comp.threshold.value = -24; comp.knee.value = 24; comp.ratio.value = 6; comp.attack.value = 0.005; comp.release.value = 0.2;
-                const lp = sfxCtx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 9500; lp.Q.value = 0.4; // срезает только самый «писк»
-                sfxMaster = sfxCtx.createGain(); sfxMaster.gain.value = sfxVol * 0.7;
+                const lp = sfxCtx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 4800; lp.Q.value = 0.3; // срезает только самый «писк»
+                sfxMaster = sfxCtx.createGain(); sfxMaster.gain.value = sfxVol * 0.5;
                 sfxMaster.connect(lp); lp.connect(comp); comp.connect(sfxCtx.destination);
                 { // лёгкое эхо «живого воздуха»: без него синтетические звуки звучат сухо и плоско
                     const n = Math.floor(sfxCtx.sampleRate * 0.7), ir = sfxCtx.createBuffer(2, n, sfxCtx.sampleRate);
@@ -371,7 +371,7 @@
                 return true;
             } catch (e) { sfxCtx = null; sfxMaster = null; return false; }
         }
-        function sfxSetVol(v) { sfxVol = v; if (sfxMaster) sfxMaster.gain.value = v * 0.7; }
+        function sfxSetVol(v) { sfxVol = v; if (sfxMaster) sfxMaster.gain.value = v * 0.5; }
         ['pointerdown', 'keydown', 'mousedown'].forEach(ev => window.addEventListener(ev, () => { sfxInit(); }, { passive: true }));
         function sfxNoiseBurst(t0, o) { // o: dur, f, f2, q, gain, atk, type
             const src = sfxCtx.createBufferSource(); src.buffer = sfxNoise; src.loop = true;
@@ -410,42 +410,39 @@
             const out = sfxCtx.createGain(); out.gain.value = k; out.connect(sfxMaster); sfxOut = out;
             const t = now + 0.005, r = 0.92 + Math.random() * 0.16; // лёгкий разброс высоты — не звучит как копия
             switch (name) {
-                case 'swing': sfxNoiseBurst(t, { dur: 0.16, f: 700 * r, f2: 2600 * r, q: 2.2, gain: 0.32, atk: 0.05 }); break;
-                case 'chop': // топор по дереву: удар, деревянное «тук» и хруст щепок
-                    sfxNoiseBurst(t, { dur: 0.02, f: 3500 * r, q: 0.7, gain: 0.5, atk: 0.001, type: 'highpass' });
-                    sfxModal(t, [160 * r, 310 * r, 560 * r, 880 * r], 0.12, 0.4);
-                    sfxTone(t, { f: 105 * r, f2: 60, dur: 0.1, gain: 0.3, atk: 0.002 });
-                    sfxCrackle(t + 0.005, { n: 7, span: 0.09, f1: 1400, f2: 5500, gain: 0.65 }); break;
-                case 'stone': // кирка по камню: звонкий удар и хруст крошки
-                    sfxNoiseBurst(t, { dur: 0.025, f: 4500 * r, q: 0.6, gain: 0.55, atk: 0.001, type: 'highpass' });
-                    sfxModal(t, [1500 * r, 2400 * r, 3500 * r], 0.1, 0.16);
-                    sfxTone(t, { f: 130 * r, f2: 70, dur: 0.08, gain: 0.25, atk: 0.002 });
-                    sfxCrackle(t + 0.005, { n: 10, span: 0.14, f1: 2200, f2: 8000, gain: 0.7 }); break;
+                case 'swing': sfxNoiseBurst(t, { dur: 0.2, f: 400 * r, f2: 1400 * r, q: 1.2, gain: 0.2, atk: 0.07 }); break; // мягкий «вжух»
+                case 'chop': // топор по дереву (как в Rust): плотный низкий «тук», без звона и свиста
+                    sfxTone(t, { f: 180 * r, f2: 70, dur: 0.13, gain: 0.7, atk: 0.003 });
+                    sfxModal(t, [130 * r, 260 * r, 420 * r], 0.14, 0.35);
+                    sfxNoiseBurst(t, { dur: 0.07, f: 900 * r, q: 0.8, gain: 0.35, atk: 0.002 });
+                    sfxCrackle(t + 0.01, { n: 4, span: 0.08, f1: 500, f2: 1800, gain: 0.18 }); break;
+                case 'stone': // кирка по камню: глухой «клонк» + шорох осыпающейся крошки
+                    sfxTone(t, { f: 210 * r, f2: 90, dur: 0.1, gain: 0.6, atk: 0.002 });
+                    sfxModal(t, [420 * r, 780 * r, 1250 * r], 0.09, 0.14);
+                    sfxNoiseBurst(t, { dur: 0.05, f: 1600 * r, q: 0.8, gain: 0.3, atk: 0.002 });
+                    sfxCrackle(t + 0.02, { n: 6, span: 0.14, f1: 600, f2: 2400, gain: 0.14 }); break;
                 case 'flesh':
-                    sfxTone(t, { f: 95 * r, f2: 42, dur: 0.16, gain: 0.65, atk: 0.002 });
-                    sfxNoiseBurst(t, { dur: 0.06, f: 1500 * r, q: 0.9, gain: 0.4, atk: 0.001 });
-                    sfxCrackle(t, { n: 4, span: 0.07, f1: 700, f2: 2600, gain: 0.3 }); break;
-                case 'hurt': sfxTone(t, { f: 80 * r, f2: 38, dur: 0.24, gain: 0.8, atk: 0.002 }); sfxNoiseBurst(t, { dur: 0.1, f: 1200, q: 0.8, gain: 0.35, atk: 0.001 }); sfxCrackle(t, { n: 4, span: 0.08, f1: 600, f2: 2400, gain: 0.3 }); break;
-                case 'dooropen': { // скрип петли + потрескивание дерева
+                    sfxTone(t, { f: 90 * r, f2: 40, dur: 0.16, gain: 0.7, atk: 0.003 });
+                    sfxNoiseBurst(t, { dur: 0.08, f: 800 * r, q: 0.7, gain: 0.35, atk: 0.002 }); break;
+                case 'hurt': sfxTone(t, { f: 75 * r, f2: 38, dur: 0.24, gain: 0.8, atk: 0.003 }); sfxNoiseBurst(t, { dur: 0.14, f: 500, q: 0.7, gain: 0.3, atk: 0.003 }); break;
+                case 'dooropen': { // деревянная дверь: тихий скрип петли
                     const o = sfxCtx.createOscillator(); o.type = 'sawtooth';
-                    const f0 = 210 * r; o.frequency.setValueAtTime(f0, t); o.frequency.linearRampToValueAtTime(f0 * 1.55, t + 0.22); o.frequency.linearRampToValueAtTime(f0 * 1.2, t + 0.42);
-                    const lfo = sfxCtx.createOscillator(), lg = sfxCtx.createGain(); lfo.frequency.value = 34; lg.gain.value = 9; lfo.connect(lg); lg.connect(o.frequency);
-                    const bp = sfxCtx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 7; bp.frequency.setValueAtTime(900 * r, t); bp.frequency.linearRampToValueAtTime(1500 * r, t + 0.25); bp.frequency.linearRampToValueAtTime(1100 * r, t + 0.44);
-                    const g = sfxCtx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.24, t + 0.08); g.gain.setValueAtTime(0.24, t + 0.3); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.46);
+                    const f0 = 150 * r; o.frequency.setValueAtTime(f0, t); o.frequency.linearRampToValueAtTime(f0 * 1.5, t + 0.22); o.frequency.linearRampToValueAtTime(f0 * 1.2, t + 0.42);
+                    const lfo = sfxCtx.createOscillator(), lg = sfxCtx.createGain(); lfo.frequency.value = 28; lg.gain.value = 6; lfo.connect(lg); lg.connect(o.frequency);
+                    const bp = sfxCtx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 4; bp.frequency.setValueAtTime(600 * r, t); bp.frequency.linearRampToValueAtTime(950 * r, t + 0.25); bp.frequency.linearRampToValueAtTime(760 * r, t + 0.44);
+                    const g = sfxCtx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.2, t + 0.1); g.gain.setValueAtTime(0.2, t + 0.3); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.46);
                     o.connect(bp); bp.connect(g); g.connect(sfxOut); o.start(t); lfo.start(t); o.stop(t + 0.5); lfo.stop(t + 0.5);
-                    sfxCrackle(t, { n: 6, span: 0.4, f1: 900, f2: 3500, gain: 0.22 });
-                    sfxNoiseBurst(t, { dur: 0.02, f: 2200, q: 1, gain: 0.35, atk: 0.001, type: 'highpass' });
+                    sfxTone(t, { f: 110 * r, f2: 85, dur: 0.07, gain: 0.25, atk: 0.003 }); // щелчок задвижки
                     break; }
-                case 'doorclose':
-                    sfxNoiseBurst(t + 0.02, { dur: 0.03, f: 2600, q: 0.7, gain: 0.45, atk: 0.001, type: 'highpass' });
-                    sfxModal(t + 0.02, [120 * r, 240 * r, 430 * r], 0.2, 0.3);
-                    sfxTone(t + 0.02, { f: 80 * r, f2: 45, dur: 0.18, gain: 0.28, atk: 0.002 });
-                    sfxCrackle(t + 0.03, { n: 5, span: 0.1, f1: 1200, f2: 4500, gain: 0.3 });
-                    sfxNoiseBurst(t + 0.16, { dur: 0.02, f: 2000, q: 1, gain: 0.3, atk: 0.001, type: 'highpass' }); break;
-                case 'step': // хруст травы и сухих листьев под ногой
-                    sfxCrackle(t, { n: 9, span: 0.11, f1: 1800, f2: 7000, gain: 0.5 });
-                    sfxNoiseBurst(t, { dur: 0.1, f: 1100 * r, q: 0.5, gain: 0.12, atk: 0.02, type: 'lowpass' });
-                    sfxTone(t, { f: 80 * r, f2: 52, dur: 0.07, gain: 0.1, atk: 0.004 }); break;
+                case 'doorclose': // глухой деревянный стук
+                    sfxTone(t + 0.02, { f: 100 * r, f2: 48, dur: 0.2, gain: 0.6, atk: 0.003 });
+                    sfxModal(t + 0.02, [110 * r, 220 * r, 380 * r], 0.2, 0.28);
+                    sfxNoiseBurst(t + 0.02, { dur: 0.08, f: 700, q: 0.7, gain: 0.25, atk: 0.002 });
+                    sfxTone(t + 0.17, { f: 130, f2: 90, dur: 0.05, gain: 0.2, atk: 0.002 }); break;
+                case 'step': // шаг по траве: мягкий шелест (шуршащая трава), как в Rust — без щелчков
+                    sfxNoiseBurst(t, { dur: 0.2, f: 1400 * r, f2: 700, q: 0.45, gain: 0.34, atk: 0.04 });
+                    sfxNoiseBurst(t + 0.05, { dur: 0.16, f: 2400 * r, f2: 1500, q: 0.4, gain: 0.12, atk: 0.04 });
+                    sfxTone(t, { f: 75 * r, f2: 50, dur: 0.08, gain: 0.12, atk: 0.006 }); break;
                 case 'roar': { // рычание медведя: низкий «рваный» голос (пила с быстрой дрожью громкости) через два формантных фильтра + дыхание
                     const dur = 1.0, o = sfxCtx.createOscillator(); o.type = 'sawtooth';
                     o.frequency.setValueAtTime(95 * r, t); o.frequency.linearRampToValueAtTime(130 * r, t + 0.18); o.frequency.exponentialRampToValueAtTime(58 * r, t + dur);
