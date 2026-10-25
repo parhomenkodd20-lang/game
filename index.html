@@ -483,6 +483,7 @@
             mallet: { id: 'mallet', icon: '🔨', name: 'Киянка', maxStack: 1, isTool: true },  // КИЯНКА
             chertyozh: { id: 'chertyozh', icon: '📘', name: 'Чертёж фундамента', maxStack: 1, isTool: true },
             lock: { id: 'lock', icon: '🔒', name: 'Замок', maxStack: 5, isTool: false },
+            codelock: { id: 'codelock', icon: '🔐', name: 'Кодовый замок', maxStack: 5, isTool: false },
             door: { id: 'door', icon: '🚪', name: 'Дверь', maxStack: 5, isTool: false },
             cupboard: { id: 'cupboard', icon: '🗄️', name: 'Шкаф', maxStack: 5, isTool: false },
             furnace: { id: 'furnace', icon: '🏭', name: 'Печь', maxStack: 5, isTool: false },
@@ -521,6 +522,11 @@
                 id: 'lock', name: 'Замок', icon: '🔒',
                 ingredients: { wood: 5 },
                 result: { type: 'lock', count: 1, icon: '🔒', isTool: false }
+            },
+            {
+                id: 'codelock', name: 'Кодовый замок', icon: '🔐',
+                ingredients: { metal_material: 5 },
+                result: { type: 'codelock', count: 1, icon: '🔐', isTool: false }
             },
             {
                 id: 'door', name: 'Дверь', icon: '🚪',
@@ -808,7 +814,7 @@
         const GFX = { // дальность прорисовки от графики НЕ зависит — это отдельная настройка
             1: { name: 'Низкая',  pr: 0.75, shadows: false, soft: false, follow: false, hemi: 0,   ambMul: 1,   fogMul: 2.3, stars: false, grade: false, grassCap: 700,  grassR: 32, grassDens: 0.18 },
             2: { name: 'Средняя', pr: 1,    shadows: true,  soft: false, follow: false, hemi: 0,   ambMul: 1,   fogMul: 1,   stars: false, grade: false, grassCap: 2600, grassR: 64, grassDens: 0.3 },
-            3: { name: 'Высокая', pr: Math.min(window.devicePixelRatio || 1, 2), shadows: true, soft: true, follow: true, hemi: 0.2, ambMul: 0.7, fogMul: 0.85, stars: true, grade: true, grassCap: 4000, grassR: 80, grassDens: 0.5 }
+            3: { name: 'Высокая', pr: Math.min(window.devicePixelRatio || 1, 2), shadows: true, soft: true, follow: true, hemi: 0.17, ambMul: 0.6, fogMul: 0.85, stars: true, grade: true, grassCap: 4000, grassR: 80, grassDens: 0.5 }
         };
         let gfx = GFX[2];
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
@@ -855,7 +861,7 @@
         const SUN_SUNSET_COLOR = new THREE.Color(0xff8a4c);
         const MOON_COLOR = new THREE.Color(0x93a8ff);
         const tmpSkyColor = new THREE.Color();
-        const SKY_NIGHT_HIGH = new THREE.Color(0x050b1e); // на высокой ночное небо глубокого тёмно-синего цвета, а не чёрное
+        const SKY_NIGHT_HIGH = new THREE.Color(0x03061a); // на высокой ночное небо глубокого тёмно-синего цвета, а не чёрное
         const tmpSunColor = new THREE.Color();
         const tmpDir = new THREE.Vector3();
 
@@ -960,7 +966,7 @@
         const vignetteEl = document.createElement('div');
         vignetteEl.style.cssText = 'position:fixed;inset:0;z-index:3;pointer-events:none;display:none;background:radial-gradient(ellipse at center, rgba(0,0,0,0) 58%, rgba(0,0,0,0.30) 100%);';
         document.body.appendChild(vignetteEl);
-        function setGrade(on) { renderer.domElement.style.filter = on ? 'contrast(1.06) saturate(1.1)' : ''; vignetteEl.style.display = on ? 'block' : 'none'; }
+        function setGrade(on) { renderer.domElement.style.filter = on ? 'contrast(1.04) saturate(1.08) brightness(0.95)' : ''; vignetteEl.style.display = on ? 'block' : 'none'; }
 
         function updateDayNightCycle(dt) {
             cycleTime = (((Date.now() / 1000 - cycleBase) % CYCLE_LENGTH) + CYCLE_LENGTH) % CYCLE_LENGTH; // общее для комнаты время суток
@@ -1583,7 +1589,19 @@
                 lg.add(led);
                 lg.position.set(leafW - 0.3, 1.8, side * 0.12); lg.visible = false; pivot.add(lg); return lg;
             });
-            g.userData.pivot = pivot; g.userData.lockMeshes = lockMeshes;
+            const codeMeshes = [-1, 1].map(side => { // кодовый замок: корпус, 12 кнопок и зелёная лампочка
+                const lg = new THREE.Group();
+                lg.add(new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.5, 0.08), metalMat));
+                const btnMat = new THREE.MeshStandardMaterial({ color: 0xb9bcc2, roughness: 0.5, metalness: 0.4 });
+                for (let r = 0; r < 4; r++) for (let c = 0; c < 3; c++) {
+                    const b = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.06, 0.03), btnMat);
+                    b.position.set((c - 1) * 0.09, 0.1 - r * 0.08, side * 0.05); lg.add(b);
+                }
+                const led = new THREE.Mesh(new THREE.SphereGeometry(0.035, 10, 8), new THREE.MeshBasicMaterial({ color: 0x22e05a }));
+                led.position.set(0, 0.2, side * 0.05); lg.add(led);
+                lg.position.set(leafW - 0.3, 1.8, side * 0.12); lg.visible = false; pivot.add(lg); return lg;
+            });
+            g.userData.pivot = pivot; g.userData.lockMeshes = lockMeshes; g.userData.codeMeshes = codeMeshes;
             return g;
         }
         function doorAt(w) { for (const d of doors.values()) if (samePos(d, w)) return d; return null; }
@@ -1594,6 +1612,7 @@
             if (d.open && i >= 0) colliders.splice(i, 1);
             else if (!d.open && i < 0) colliders.push(d.collider);
         }
+        function setDoorCodeLock(d, owner) { d.ck = true; d.owner = owner; d.mesh.userData.codeMeshes.forEach(l => l.visible = true); }
         function setDoorLocked(d, owner) {
             d.locked = true; d.owner = owner;
             d.mesh.userData.lockMeshes.forEach(l => l.visible = true);
@@ -1610,6 +1629,7 @@
             doors.set(m.id, d);
             colliders.push(collider);
             if (m.locked) setDoorLocked(d, m.owner);
+            if (m.ck) { setDoorCodeLock(d, m.owner); d.cs = !!m.cs; d.ccode = typeof m.ccode === 'string' ? m.ccode : null; d.cauth = new Set(Array.isArray(m.cauth) ? m.cauth : []); }
             if (m.open) { setDoorOpen(d, true, true); d.angle = DOOR_OPEN_ANGLE; d.pivot.rotation.y = d.angle; }
         }
         const DOOR_OPEN_ANGLE = -Math.PI / 2;
@@ -1632,9 +1652,50 @@
         function useDoor(d) {
             gameState.attackCooldown = 0.35;
             const it = gameState.inventory[gameState.selectedSlot];
-            if (!d.locked && it && it.type === 'lock') { netSend({ t: 'lock', id: d.id }); return; } // с замком в руке — ставим замок
+            if (!d.locked && !d.ck && it && it.type === 'lock') { netSend({ t: 'lock', id: d.id }); return; } // с замком в руке — ставим замок
+            if (!d.locked && !d.ck && it && it.type === 'codelock') { netSend({ t: 'clock', id: d.id }); return; } // с кодовым замком — ставим его
+            if (d.ck && d.cs) { netSend({ t: 'dooruse', id: d.id }); return; } // есть код: хозяин и те, кто уже ввёл код, откроют; остальным придёт просьба ввести код
             if (d.locked && d.owner !== myId) { flashDoorHint('🔒 Заперто — открыть может только владелец замка'); return; }
             netSend({ t: 'dooruse', id: d.id });
+        }
+
+
+        // ---------- кодовый замок: окошко для ввода 4 цифр ----------
+        const codePanelEl = document.createElement('div');
+        codePanelEl.style.cssText = 'position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:60;display:none;background:rgba(20,22,28,0.96);border:2px solid #3a3f4b;border-radius:12px;padding:18px 22px;color:#fff;font:600 16px sans-serif;text-align:center;min-width:240px;';
+        codePanelEl.innerHTML = '<div id="code-title" style="margin-bottom:10px;"></div><input id="code-input" type="text" inputmode="numeric" maxlength="4" autocomplete="off" placeholder="••••" style="width:120px;text-align:center;font:700 28px monospace;letter-spacing:8px;padding:6px;border-radius:8px;border:2px solid #555;background:#0e1014;color:#7dffa0;"><div id="code-msg" style="min-height:20px;margin:8px 0;font-size:14px;color:#ff8a80;"></div><button id="code-ok" style="background:#2ecc71;color:#fff;border:0;border-radius:8px;padding:8px 22px;font:700 16px sans-serif;cursor:pointer;margin-right:8px;">ОК</button><button id="code-cancel" style="background:#444;color:#fff;border:0;border-radius:8px;padding:8px 16px;font:600 16px sans-serif;cursor:pointer;">Отмена</button>';
+        document.body.appendChild(codePanelEl);
+        const codeInputEl = codePanelEl.querySelector('#code-input'), codeMsgEl = codePanelEl.querySelector('#code-msg'), codeTitleEl = codePanelEl.querySelector('#code-title');
+        let codeDoorId = null, codeMode = 'try';
+        function openCodePanel(d, mode) {
+            codeDoorId = d.id; codeMode = mode;
+            codeTitleEl.textContent = mode === 'set' ? '🔐 Придумай код (4 цифры)' : '🔐 Введи код от двери';
+            codeInputEl.value = ''; codeMsgEl.textContent = '';
+            keys.w = keys.a = keys.s = keys.d = false;
+            gameState.isInventoryOpen = true; codePanelEl.style.display = 'block';
+            try { controls.unlock(); } catch (_) {}
+            setTimeout(() => codeInputEl.focus(), 50);
+        }
+        function closeCodePanel() {
+            if (codePanelEl.style.display === 'none') return;
+            codePanelEl.style.display = 'none'; codeDoorId = null; gameState.isInventoryOpen = false;
+            try { controls.lock(); } catch (_) {}
+        }
+        function submitCode() {
+            const v = codeInputEl.value.trim();
+            if (!/^\d{4}$/.test(v)) { codeMsgEl.textContent = 'Нужно ровно 4 цифры'; return; }
+            netSend(codeMode === 'set' ? { t: 'cset', id: codeDoorId, code: v } : { t: 'ctry', id: codeDoorId, code: v });
+            codeMsgEl.style.color = '#9fe3ff'; codeMsgEl.textContent = '…';
+        }
+        codeInputEl.addEventListener('input', () => { codeInputEl.value = codeInputEl.value.replace(/\D/g, '').slice(0, 4); });
+        ['keydown', 'keyup', 'keypress'].forEach(ev => codeInputEl.addEventListener(ev, (e) => { e.stopPropagation(); if (ev === 'keydown') { if (e.key === 'Enter') submitCode(); else if (e.key === 'Escape') closeCodePanel(); } }));
+        codePanelEl.querySelector('#code-ok').onclick = submitCode;
+        codePanelEl.querySelector('#code-cancel').onclick = closeCodePanel;
+        function onCodeResult(m) {
+            if (m.ok) { if (m.kind === 'set') flashDoorHint('🔐 Код установлен'); closeCodePanel(); return; }
+            if (m.need) { const d = doors.get(m.id); if (d && codePanelEl.style.display === 'none') openCodePanel(d, 'try'); return; }
+            codeMsgEl.style.color = '#ff8a80'; codeMsgEl.textContent = m.wait ? 'Слишком много попыток — подожди ' + m.wait + ' с' : 'Неверный код';
+            codeInputEl.value = ''; codeInputEl.focus();
         }
 
         // ---------- шкаф (как в Rust): регистрация, запрет строить чужим, защита от гниения ----------
@@ -3510,6 +3571,10 @@
         window.addEventListener('mousedown', (e) => {
             lastGestureAt = performance.now();
             if (!controls.isLocked || gameState.isInventoryOpen || mapOpen) return;
+            if (e.button === 2 && !isHoldingBlueprint() && !netLoading()) { // ПКМ по двери с кодовым замком: хозяин задаёт/меняет код, остальные вводят
+                const pc = aimedPiece(true);
+                if (pc && pc.kind === 'door' && pc.rec.ck) { openCodePanel(pc.rec, pc.rec.owner === myId ? 'set' : 'try'); return; }
+            }
             if (e.button === 2 && isHoldingBlueprint() && !netLoading()) {
                 wheelOpen = true; wheelCursorX = 0; wheelCursorY = 0; controls.enabled = false;
                 buildWheelEl.style.display = 'block'; updateWheelHighlight();
@@ -4699,6 +4764,9 @@
                 case 'piecedel': applyPieceDelete(msg); break;
                 case 'doorset': applyDoorSet(msg); break;
                 case 'doorlock': { const d = doors.get(msg.id); if (d && !d.locked) { setDoorLocked(d, msg.owner); if (msg.owner === myId) { costSpend('lock', 1); updateUI(); } } break; }
+                case 'doorck': { const d = doors.get(msg.id); if (d && !d.ck) { setDoorCodeLock(d, msg.owner); if (msg.owner === myId) { costSpend('codelock', 1); updateUI(); flashDoorHint('🔐 Замок поставлен — нажми ПКМ по двери, чтобы задать код'); } } break; }
+                case 'doorcs': { const d = doors.get(msg.id); if (d) d.cs = true; break; }
+                case 'cres': onCodeResult(msg); break;
                 case 'doorstate': { const d = doors.get(msg.id); if (d) setDoorOpen(d, msg.open); break; }
                 case 'tcset': applyTcSet(msg); break;
                 case 'bears': applyBearSnap(msg.b, msg.c); break;
@@ -4909,8 +4977,37 @@
                     if (d && !d.locked && !tcBlocked(d.x, d.z, fromId) && !(p.state && Math.hypot(p.state.x - d.x, p.state.z - d.z) > 14)) hostAll({ t: 'doorlock', id: d.id, owner: fromId });
                     break;
                 }
-                case 'dooruse': { // открыть/закрыть: запертую может только владелец замка
+                case 'clock': { // поставить кодовый замок
                     const d = typeof m.id === 'string' ? doors.get(m.id) : null;
+                    if (d && !d.locked && !d.ck && !tcBlocked(d.x, d.z, fromId) && !(p.state && Math.hypot(p.state.x - d.x, p.state.z - d.z) > 14)) hostAll({ t: 'doorck', id: d.id, owner: fromId });
+                    break;
+                }
+                case 'cset': { // хозяин задаёт код (старые допущенные игроки теряют доступ)
+                    const d = typeof m.id === 'string' ? doors.get(m.id) : null;
+                    if (d && d.ck && d.owner === fromId && typeof m.code === 'string' && /^\d{4}$/.test(m.code) && !(p.state && Math.hypot(p.state.x - d.x, p.state.z - d.z) > 14)) {
+                        d.ccode = m.code; d.cauth = new Set([fromId]); d.cs = true; hostSaveSoon();
+                        hostAll({ t: 'doorcs', id: d.id }); sendTo(fromId, { t: 'cres', ok: 1, kind: 'set', id: d.id });
+                    }
+                    break;
+                }
+                case 'ctry': { // попытка ввести код
+                    const d = typeof m.id === 'string' ? doors.get(m.id) : null;
+                    if (!d || !d.ck || !d.ccode || typeof m.code !== 'string' || (p.state && Math.hypot(p.state.x - d.x, p.state.z - d.z) > 14)) break;
+                    const fk = fromId + '|' + d.id, now = performance.now(), f = codeFails.get(fk) || { n: 0, until: 0 };
+                    if (now < f.until) { sendTo(fromId, { t: 'cres', ok: 0, id: d.id, wait: Math.ceil((f.until - now) / 1000) }); break; }
+                    if (m.code === d.ccode) {
+                        codeFails.delete(fk); if (!d.cauth) d.cauth = new Set(); d.cauth.add(fromId); hostSaveSoon();
+                        sendTo(fromId, { t: 'cres', ok: 1, id: d.id });
+                        if (!d.open) hostAll({ t: 'doorstate', id: d.id, open: true });
+                    } else {
+                        f.n++; if (f.n >= 5) { f.n = 0; f.until = now + 30000; } codeFails.set(fk, f);
+                        sendTo(fromId, { t: 'cres', ok: 0, id: d.id, wait: f.until > now ? 30 : 0 });
+                    }
+                    break;
+                }
+                case 'dooruse': { // открыть/закрыть: запертую может только владелец замка; с кодом — тот, кто его ввёл
+                    const d = typeof m.id === 'string' ? doors.get(m.id) : null;
+                    if (d && d.ck && d.ccode && d.owner !== fromId && !(d.cauth && d.cauth.has(fromId))) { sendTo(fromId, { t: 'cres', need: 1, id: d.id }); break; } // не вводил код — пусть введёт
                     if (d && (!d.locked || d.owner === fromId) && !(p.state && Math.hypot(p.state.x - d.x, p.state.z - d.z) > 14)) hostAll({ t: 'doorstate', id: d.id, open: !d.open });
                     break;
                 }
@@ -5011,6 +5108,7 @@
             if (t - lastHostPingAt > 2000) { lastHostPingAt = t; hostBroadcast({ t: 'ping' }); }
         }
         var lastHostInnerAt = 0, lastMonAt = 0, urgentTimer = null;
+        const codeFails = new Map(); // «игрок|дверь» -> неверные попытки кода (защита от перебора)
         function hostSaveSoon() { if (role !== 'host' || urgentTimer) return; urgentTimer = setTimeout(() => { urgentTimer = null; try { saveWorldNow(peer, true); } catch (_) {} }, 3000); } // построили/сломали — сохраняем через 3 секунды
         function hostTickInner() {
             const now = performance.now();
@@ -5040,7 +5138,7 @@
                 foundations: [...foundations.values()].map(f => ({ id: f.id, x: f.x, y: f.y, z: f.z, material: f.material, createdAt: f.createdAt, hp: f.hp })),
                 walls: [...walls.values()].map(w => ({ id: w.id, x: w.x, y: w.y, z: w.z, rot: w.rot, variant: w.variant, material: w.material, createdAt: w.createdAt, hp: w.hp })),
                 roofs: [...roofs.values()].map(r => ({ id: r.id, x: r.x, y: r.y, z: r.z, material: r.material, createdAt: r.createdAt, hp: r.hp })),
-                doors: [...doors.values()].map(d => ({ id: d.id, x: d.x, y: d.y, z: d.z, rot: d.rot, open: d.open, locked: d.locked, owner: d.owner, createdAt: d.createdAt, hp: d.hp })),
+                doors: [...doors.values()].map(d => ({ id: d.id, x: d.x, y: d.y, z: d.z, rot: d.rot, open: d.open, locked: d.locked, owner: d.owner, ck: d.ck ? 1 : 0, cs: d.cs ? 1 : 0, ccode: d.ccode || undefined, cauth: d.cauth ? [...d.cauth] : undefined, createdAt: d.createdAt, hp: d.hp })),
                 cupboards: [...cupboards.values()].map(t => ({ id: t.id, x: t.x, y: t.y, z: t.z, rot: t.rot, wood: t.wood, stone: t.stone, registered: t.registered, createdAt: t.createdAt })),
                 furnaces: [...furnaces.values()].map(f => ({ id: f.id, x: f.x, y: f.y, z: f.z, rot: f.rot, wood: f.wood, cells: f.cells, on: f.on, burn: f.burn, createdAt: f.createdAt })),
                 stairs: [...stairs.values()].map(st => ({ id: st.id, x: st.x, y: st.y, z: st.z, rot: st.rot, material: st.material, createdAt: st.createdAt, hp: st.hp })),
