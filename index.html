@@ -443,6 +443,13 @@
                     sfxNoiseBurst(t, { dur: 0.2, f: 1400 * r, f2: 700, q: 0.45, gain: 0.34, atk: 0.04 });
                     sfxNoiseBurst(t + 0.05, { dur: 0.16, f: 2400 * r, f2: 1500, q: 0.4, gain: 0.12, atk: 0.04 });
                     sfxTone(t, { f: 75 * r, f2: 50, dur: 0.08, gain: 0.12, atk: 0.006 }); break;
+                case 'bowshot': // щелчок тетивы: короткий «звон» и хлопок
+                    sfxTone(t, { f: 240 * r, f2: 110, dur: 0.2, gain: 0.45, type: 'triangle', atk: 0.002 });
+                    sfxNoiseBurst(t, { dur: 0.1, f: 1700, q: 0.8, gain: 0.3, atk: 0.002 });
+                    sfxTone(t + 0.01, { f: 95 * r, f2: 60, dur: 0.1, gain: 0.25, atk: 0.003 });
+                    sfxNoiseBurst(t + 0.05, { dur: 0.25, f: 700 * r, f2: 1900, q: 1.8, gain: 0.12, atk: 0.06 }); break; // свист стрелы
+                case 'bowdraw': sfxNoiseBurst(t, { dur: 0.55, f: 450 * r, f2: 800, q: 3, gain: 0.07, atk: 0.2 }); break; // скрип натягиваемого лука
+                case 'arrowhit': sfxTone(t, { f: 150 * r, f2: 80, dur: 0.09, gain: 0.4, atk: 0.002 }); sfxNoiseBurst(t, { dur: 0.05, f: 1400, q: 0.8, gain: 0.25, atk: 0.001 }); break;
                 case 'roar': { // рычание медведя: низкий «рваный» голос (пила с быстрой дрожью громкости) через два формантных фильтра + дыхание
                     const dur = 1.0, o = sfxCtx.createOscillator(); o.type = 'sawtooth';
                     o.frequency.setValueAtTime(95 * r, t); o.frequency.linearRampToValueAtTime(130 * r, t + 0.18); o.frequency.exponentialRampToValueAtTime(58 * r, t + dur);
@@ -483,6 +490,8 @@
             mallet: { id: 'mallet', icon: '🔨', name: 'Киянка', maxStack: 1, isTool: true },  // КИЯНКА
             chertyozh: { id: 'chertyozh', icon: '📘', name: 'Чертёж фундамента', maxStack: 1, isTool: true },
             lock: { id: 'lock', icon: '🔒', name: 'Замок', maxStack: 5, isTool: false },
+            bow: { id: 'bow', icon: '🏹', name: 'Лук', maxStack: 1, isTool: true },
+            arrow: { id: 'arrow', icon: '↗️', name: 'Стрела', maxStack: 30, isTool: false },
             codelock: { id: 'codelock', icon: '🔐', name: 'Кодовый замок', maxStack: 5, isTool: false },
             door: { id: 'door', icon: '🚪', name: 'Дверь', maxStack: 5, isTool: false },
             cupboard: { id: 'cupboard', icon: '🗄️', name: 'Шкаф', maxStack: 5, isTool: false },
@@ -522,6 +531,16 @@
                 id: 'lock', name: 'Замок', icon: '🔒',
                 ingredients: { wood: 5 },
                 result: { type: 'lock', count: 1, icon: '🔒', isTool: false }
+            },
+            {
+                id: 'bow', name: 'Лук', icon: '🏹',
+                ingredients: { cloth: 30, wood: 20 },
+                result: { type: 'bow', count: 1, icon: '🏹', isTool: true }
+            },
+            {
+                id: 'arrow', name: 'Стрела (×4)', icon: '↗️',
+                ingredients: { stone_material: 5, wood: 5 },
+                result: { type: 'arrow', count: 4, icon: '↗️', isTool: false }
             },
             {
                 id: 'codelock', name: 'Кодовый замок', icon: '🔐',
@@ -571,8 +590,8 @@
         const HEAD_MULT = 2;              // множитель урона в голову
         const LOOT_RANGE = 5;             // на каком расстоянии от сумки работает кнопка E
         const BAG_LIFETIME_MS = 5 * 60 * 1000;
-        const DAMAGE = { stone: 5, torch: 3, axe: 7, pickaxe: 9, mallet: 7, spear: 25 }; // копьё: 25 по телу, 50 в голову
-        const REACH = { spear: 5.5 };         // у копья дальность удара больше
+        const DAMAGE = { stone: 5, torch: 3, axe: 7, pickaxe: 9, mallet: 7, spear: 25, bow: 22 }; // лук: стрела 22 по телу, 44 в голову; копьё: 25 по телу, 50 в голову
+        const REACH = { spear: 5.5, bow: 220 };         // у копья дальность удара больше
         const meleeRange = (type) => REACH[type] || MELEE_RANGE;
         const playerState = { hp: MAX_HP, lastHurtAt: 0, invulnUntil: 0 };
 
@@ -1115,6 +1134,48 @@
         }
         const spearGroup = buildSpearMesh();
         rightArm.add(spearGroup);
+
+        // --- ЛУК и СТРЕЛА (модель собрана из простых деталей) ---
+        function buildArrowMesh() { // стрела смотрит вдоль -Z; начало координат — у оперения
+            const g = new THREE.Group();
+            const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.9, 6), new THREE.MeshLambertMaterial({ color: 0xc9a36a, flatShading: true }));
+            shaft.rotation.x = Math.PI / 2; shaft.position.z = -0.45; g.add(shaft);
+            const head = new THREE.Mesh(new THREE.ConeGeometry(0.03, 0.13, 6), new THREE.MeshLambertMaterial({ color: 0x80848c, flatShading: true }));
+            head.rotation.x = -Math.PI / 2; head.position.z = -0.96; g.add(head);
+            const fm = new THREE.MeshLambertMaterial({ color: 0xe4e0d4, flatShading: true });
+            const f1 = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.004, 0.14), fm); f1.position.z = -0.09; g.add(f1);
+            const f2 = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.1, 0.14), fm); f2.position.z = -0.09; g.add(f2);
+            return g;
+        }
+        function buildBowMesh() { // лук стоит вертикально, стреляет в -Z; тетива сзади (+Z). userData.setDraw(натяжение 0..1, видна ли стрела)
+            const g = new THREE.Group();
+            const wood = new THREE.MeshLambertMaterial({ color: 0x7a4a1f, flatShading: true });
+            const gripM = new THREE.MeshLambertMaterial({ color: 0x2f2014, flatShading: true });
+            const strM = new THREE.MeshBasicMaterial({ color: 0xece6d2 });
+            const H = 0.9, TZ = 0.16, N = 8, UP = new THREE.Vector3(0, 1, 0);
+            const unit = new THREE.CylinderGeometry(1, 1, 1, 5);
+            const limbs = []; for (let i = 0; i < N; i++) { const m = new THREE.Mesh(unit, wood); g.add(m); limbs.push(m); }
+            const sTop = new THREE.Mesh(unit, strM), sBot = new THREE.Mesh(unit, strM); g.add(sTop); g.add(sBot);
+            const grip = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.26, 0.09), gripM); g.add(grip);
+            const arrow = buildArrowMesh(); g.add(arrow);
+            const a = new THREE.Vector3(), b = new THREE.Vector3(), d = new THREE.Vector3(), nock = new THREE.Vector3(), tipT = new THREE.Vector3(), tipB = new THREE.Vector3();
+            function seg(m, p, q, r) { m.position.copy(p).add(q).multiplyScalar(0.5); d.copy(q).sub(p); const len = d.length() || 1e-4; m.scale.set(r, len, r); m.quaternion.setFromUnitVectors(UP, d.divideScalar(len)); }
+            g.userData.setDraw = (dp, showArrow) => {
+                const tz = TZ + 0.07 * dp, h = H * (1 - 0.06 * dp); // чем сильнее тянем, тем больше изгиб плеч
+                for (let i = 0; i < N; i++) {
+                    const t0 = -1 + 2 * i / N, t1 = -1 + 2 * (i + 1) / N;
+                    a.set(0, t0 * h, tz * t0 * t0); b.set(0, t1 * h, tz * t1 * t1);
+                    seg(limbs[i], a, b, 0.034 - 0.017 * Math.abs((t0 + t1) / 2));
+                }
+                tipT.set(0, h, tz); tipB.set(0, -h, tz); nock.set(0, 0, tz + 0.04 + 0.5 * dp);
+                seg(sTop, tipT, nock, 0.006); seg(sBot, nock, tipB, 0.006);
+                arrow.visible = !!showArrow; arrow.position.set(0, 0, nock.z);
+            };
+            g.userData.setDraw(0, true);
+            return g;
+        }
+        const bowView = buildBowMesh(); bowView.scale.setScalar(0.5); bowView.visible = false; viewModel.add(bowView);
+        const bowDraw = { on: false, t: 0, recoil: 0 };
 
         // Применяем начальные координаты
         pickaxeGroup.scale.setScalar(devSettings.pickaxe.toolScale);
@@ -3386,6 +3447,92 @@
             if (e.code === 'KeyC') keys.down = false;
         });
 
+        // ---------- лук: натяжение, выстрел и полёт стрел ----------
+        const isHoldingBow = () => { const it = gameState.inventory[gameState.selectedSlot]; return !!(it && it.type === 'bow'); };
+        function startDraw() {
+            if (bowDraw.on || gameState.attackCooldown > 0 || gameState.isInventoryOpen || netLoading() || dead) return;
+            if (costHave('arrow') < 1) { flashDoorHint('Нет стрел — скрафти их (камень + дерево)'); return; }
+            bowDraw.on = true; bowDraw.t = 0; netSend({ t: 'draw', on: 1 }); sfx('bowdraw');
+        }
+        function cancelDraw() { if (!bowDraw.on) return; bowDraw.on = false; netSend({ t: 'draw', on: 0 }); }
+        function releaseBow() {
+            if (!bowDraw.on) return;
+            bowDraw.on = false; netSend({ t: 'draw', on: 0 });
+            if (bowDraw.t < 0.25 || costHave('arrow') < 1) return; // слишком слабо потянул — стрела не вылетает
+            const power = Math.min(1, bowDraw.t / 0.85);
+            costSpend('arrow', 1); updateUI();
+            const dir = new THREE.Vector3(); camera.getWorldDirection(dir);
+            const right = new THREE.Vector3().crossVectors(dir, camera.up).normalize();
+            const o = camera.position.clone().addScaledVector(dir, 0.9).addScaledVector(right, 0.1); o.y -= 0.15;
+            const v = dir.clone().multiplyScalar(40 + 60 * power); // чем дольше тянул, тем быстрее и дальше летит
+            spawnArrow(o, v, true);
+            netSend({ t: 'arrow', x: r2(o.x), y: r2(o.y), z: r2(o.z), vx: r2(v.x), vy: r2(v.y), vz: r2(v.z) });
+            bowDraw.recoil = 0.25; gameState.attackCooldown = 0.4; sfx('bowshot');
+        }
+        const arrows = [], ARROW_G = 10, arrowRay = new THREE.Raycaster();
+        let arrowStatic = [], arrowStaticAt = -1e9;
+        const _aPrev = new THREE.Vector3(), _aDir = new THREE.Vector3(), _aLook = new THREE.Vector3();
+        function arrowStaticTargets(now) { // деревья, камни и постройки: стрела в них втыкается (список обновляем раз в секунду)
+            if (now - arrowStaticAt > 1000) {
+                arrowStaticAt = now; const t = [];
+                scene.traverse(c => { if (c.isMesh && (c.userData.treeRoot || c.userData.isStoneResource)) t.push(c); });
+                Object.values(pieceMaps()).forEach(mp => mp.forEach(r => { if (r.mesh) t.push(r.mesh); }));
+                arrowStatic = t;
+            }
+            return arrowStatic;
+        }
+        function removeArrow(a) { scene.remove(a.mesh); const i = arrows.indexOf(a); if (i >= 0) arrows.splice(i, 1); }
+        function spawnArrow(o, v, mine) {
+            const mesh = buildArrowMesh(); mesh.position.copy(o); scene.add(mesh);
+            arrows.push({ mesh, p: o.clone(), v: v.clone(), mine, t: 0, stuck: false, life: 0 });
+            if (arrows.length > 60) removeArrow(arrows[0]);
+        }
+        function updateArrows(dt, now) {
+            if (!arrows.length) return;
+            for (const a of arrows.slice()) {
+                if (a.stuck) { a.life += dt; if (a.life > 25) removeArrow(a); continue; } // воткнувшаяся стрела лежит 25 секунд
+                a.t += dt; if (a.t > 10) { removeArrow(a); continue; }
+                _aPrev.copy(a.p);
+                a.v.y -= ARROW_G * dt; a.p.addScaledVector(a.v, dt);
+                a.mesh.position.copy(a.p); _aLook.copy(a.p).sub(a.v); a.mesh.lookAt(_aLook); // нос стрелы смотрит по полёту
+                _aDir.copy(a.p).sub(_aPrev); const len = _aDir.length(); if (len < 1e-6) continue; _aDir.divideScalar(len);
+                arrowRay.set(_aPrev, _aDir); arrowRay.near = 0; arrowRay.far = len + 0.05;
+                let best = null, kind = null;
+                const st = arrowRay.intersectObjects(arrowStaticTargets(now), true)[0]; if (st) { best = st; kind = 'wall'; }
+                if (a.mine) { // попадания по игрокам и медведям засчитывает тот, кто стрелял; хозяин проверит дальность и спишет здоровье
+                    const pm = []; remotePlayers.forEach(rp => { if (!rp.dead) pm.push(rp.model); });
+                    const ph = pm.length ? arrowRay.intersectObjects(pm, true)[0] : null;
+                    if (ph && (!best || ph.distance < best.distance)) { best = ph; kind = 'player'; }
+                    const bm = []; bears.forEach(b => bm.push(b.mesh.root));
+                    const bh = bm.length ? arrowRay.intersectObjects(bm, true)[0] : null;
+                    if (bh && (!best || bh.distance < best.distance)) { best = bh; kind = 'bear'; }
+                }
+                if (!best) {
+                    const gh = getTerrainHeight(a.p.x, a.p.z);
+                    if (a.p.y < gh) { a.p.y = gh; a.mesh.position.copy(a.p); a.stuck = true; sfx('arrowhit', a.p); }
+                    continue;
+                }
+                if (kind === 'player') {
+                    let o = best.object; while (o && !o.userData.playerId) o = o.parent;
+                    if (o) {
+                        const head = best.object.parent === o.userData.head;
+                        spawnBlood(best.point.x, best.point.y, best.point.z, head ? 16 : 11);
+                        netSend({ t: 'atk', target: o.userData.playerId, head, px: r2(best.point.x), py: r2(best.point.y), pz: r2(best.point.z) });
+                        flashHitMarker(head);
+                    }
+                    removeArrow(a);
+                } else if (kind === 'bear') {
+                    let o = best.object; while (o && !o.userData.bearId) o = o.parent;
+                    if (o) {
+                        spawnBlood(best.point.x, best.point.y, best.point.z, 11);
+                        netSend({ t: 'bearhit', id: o.userData.bearId, head: !!best.object.userData.head });
+                        flashHitMarker(false);
+                    }
+                    removeArrow(a);
+                } else { a.p.copy(best.point); a.mesh.position.copy(a.p); a.stuck = true; sfx('arrowhit', a.p); } // воткнулась в дерево, камень или постройку
+            }
+        }
+
         function onAttack() {
             if (gameState.isAttacking || gameState.attackCooldown > 0 || gameState.isInventoryOpen || netLoading()) return;
             const currentItem = gameState.inventory[gameState.selectedSlot];
@@ -3594,9 +3741,10 @@
                     else useDoor(piece.rec); return;                        // ЛКМ по двери — открыть/закрыть (или поставить замок)
                 }
             }
-            if (e.button === 0 && !wheelOpen && !repairOpen) onAttack();
+            if (e.button === 0 && !wheelOpen && !repairOpen) { if (isHoldingBow()) startDraw(); else onAttack(); }
         });
         window.addEventListener('mouseup', (e) => {
+            if (e.button === 0 && bowDraw.on) releaseBow();
             if (e.button === 0 && repairOpen) closeRepairWheel(true);
             if (e.button === 2 && wheelOpen) {
                 wheelOpen = false; controls.enabled = true; buildWheelEl.style.display = 'none';
@@ -3766,6 +3914,11 @@
                 armR: { pos: [0.7200, 1.8400, 0.0000], rot: [-1.3090, -0.0175, -0.0960] },
                 armL: { pos: [-0.7200, 1.9500, 0.0000], rot: [0.0500, 0.0000, -0.0600] }
             },
+            bow: {
+                pos: [0.0, -0.25, 0.0], rot: [-1.5708, 0.0, 0.0], scale: 0.95,
+                armR: { pos: [0.7200, 1.9500, 0.0000], rot: [-1.4500, 0.0000, -0.1000] },
+                armL: { pos: [-0.7200, 1.9500, 0.0000], rot: [-1.3000, 0.0000, 0.1500] }
+            },
             chertyozh: {
                 pos: [-0.3300, -0.0300, -0.0400], rot: [0.3500, 0.2500, 0.1000], scale: 1.2000,
                 armR: { pos: [0.7200, 1.9500, 0.0000], rot: [-1.0908, 0.0175, -0.4276] },
@@ -3776,6 +3929,13 @@
         // Клонирует существующую 3D-модель предмета (те же группы, что и в руке от первого лица)
         // и подгоняет её под ладонь модели персонажа.
         function createHeldItemMesh(type) {
+            if (type === 'bow') { // у лука своя модель (с подвижной тетивой), а не копия из руки от первого лица
+                const b = buildBowMesh(); b.userData.setDraw(0, false);
+                const c = window.devSettingsThirdPerson.bow;
+                b.position.set(c.pos[0], c.pos[1], c.pos[2]); b.rotation.set(c.rot[0], c.rot[1], c.rot[2]); b.scale.setScalar(c.scale);
+                b.traverse(o => { if (o.isMesh) o.castShadow = true; });
+                return b;
+            }
             let src = null;
             if (type === 'stone') src = stoneMesh;
             else if (type === 'pickaxe') src = pickaxeGroup;
@@ -3910,6 +4070,7 @@
             ud.heldType = type;
             if (type) {
                 ud.heldItem = createHeldItemMesh(type);
+                ud.bowObj = (type === 'bow') ? ud.heldItem : null;
                 if (ud.heldItem) ud.armR.hand.add(ud.heldItem);
             }
             ud.fromRotX = ud.currentRestRotX;
@@ -3975,6 +4136,12 @@
                 ud.armL.pivot.rotation.z = -ARM_REST_ROT.z;
             }
             ud.armL.pivot.rotation.x = restRotXL + (ud.heldType === 'stone' ? swing * 0.6 * sgnL : 0);
+            if (ud.heldType === 'bow') { // натягивает тетиву: левая рука тянется к щеке, тетива и стрела следуют за ней
+                ud.drawT = (ud.drawT || 0) + dt;
+                const dp = ud.drawing ? Math.min(1, ud.drawT / 0.85) : 0;
+                ud.armL.pivot.rotation.x = restRotXL + dp * 0.6; ud.armL.pivot.rotation.y = -dp * 0.7; ud.armL.pivot.position.z -= dp * 0.25;
+                if (ud.bowObj) ud.bowObj.userData.setDraw(dp, !!ud.drawing);
+            }
         }
 
         // --- ЛОКОМОЦИЯ МОДЕЛИ: ноги, прыжок, наклон головы ---
@@ -4008,7 +4175,7 @@
         const SEND_INTERVAL_MS = 50;   // как часто шлём своё состояние
         const HOST_TICK_MS = 50;       // как часто хозяин рассылает позиции
         const PEER_TIMEOUT_MS = 45000; // столько молчания = игрок отвалился (вкладка в фоне тормозит таймеры — даём запас)
-        const HELD_ITEMS = ['stone', 'pickaxe', 'axe', 'mallet', 'torch', 'chertyozh', 'spear'];
+        const HELD_ITEMS = ['stone', 'pickaxe', 'axe', 'mallet', 'torch', 'chertyozh', 'spear', 'bow'];
         const RESOURCE_ID = /^(tree|rock)_[rc]?\d{1,6}$/; // обычные (tree_5), возродившиеся (rock_r7) и кратерные (rock_c0)
         // ===== Свой игровой сервер (WebSocket). Впиши адрес сюда после запуска на Render, например 'my-game.onrender.com'.
         // Можно и без правки файла: game.html?server=my-game.onrender.com  Пусто = старый режим через PeerJS.
@@ -4751,6 +4918,8 @@
                     (msg.p || []).forEach(p => { if (p.id !== myId) applyRemoteState(p.id, p); });
                     break;
                 case 'swing': remoteSwing(msg.id); break;
+                case 'arrowv': if (msg.id !== myId && [msg.x, msg.y, msg.z].every(v => isNum(v, 2000)) && [msg.vx, msg.vy, msg.vz].every(v => isNum(v, 200))) { spawnArrow(new THREE.Vector3(msg.x, msg.y, msg.z), new THREE.Vector3(msg.vx, msg.vy, msg.vz), false); sfx('bowshot', { x: msg.x, y: msg.y, z: msg.z }); } break;
+                case 'drawv': { const rp = remotePlayers.get(msg.id); if (rp && rp.model) { rp.model.userData.drawing = !!msg.on; rp.model.userData.drawT = 0; } break; }
                 case 'hit': applyRemoteHit(msg.id, msg.hits, true); break;
                 case 'leave': removeRemotePlayer(msg.id); break;
                 case 'dmg': if (isNum(msg.d, 100) && msg.d > 0) applyDamage(msg.d, !!msg.kill); break;
@@ -4885,6 +5054,18 @@
                         ? { x: m.px, y: m.py, z: m.pz } : { x: b.x, y: b.y - 0.6, z: b.z };
                     hostBroadcast({ t: 'blood', v: m.target, x: bp.x, y: bp.y, z: bp.z, h: head ? 1 : 0 }, fromId); // атакующий уже показал кровь у себя
                     if (fromId !== myId && m.target !== myId) spawnBlood(bp.x, bp.y, bp.z, head ? 16 : 11);
+                    break;
+                }
+                case 'arrow': { // выстрел из лука: показываем полёт стрелы остальным (попадания считает сам стрелок)
+                    if (![m.x, m.y, m.z].every(v => isNum(v, 2000)) || ![m.vx, m.vy, m.vz].every(v => isNum(v, 200)) || !p.state || p.state.item !== 'bow') return;
+                    const nowA = performance.now(); if (nowA - (p.lastArrow || 0) < 300) return; p.lastArrow = nowA;
+                    const am = { t: 'arrowv', id: fromId, x: m.x, y: m.y, z: m.z, vx: m.vx, vy: m.vy, vz: m.vz };
+                    hostBroadcast(am, fromId); if (fromId !== myId) handleNetMessage(am);
+                    break;
+                }
+                case 'draw': { // игрок натягивает/отпускает тетиву — остальные видят это на его модели
+                    const dm = { t: 'drawv', id: fromId, on: m.on ? 1 : 0 };
+                    hostBroadcast(dm, fromId); if (fromId !== myId) handleNetMessage(dm);
                     break;
                 }
                 case 'god': { p.god = !!m.on; break; } // админ включил/выключил бессмертие: урон ему не засчитываем
@@ -5653,7 +5834,7 @@
             localHeld = isTool ? currentItem.type : null;
             updateRemotePlayers(dt);
             if (bricksDirty) refreshWallBricks();
-            updateBears(dt); updateCarcasses(dt);
+            updateBears(dt); updateCarcasses(dt); updateArrows(dt, time);
             updateBlood(dt); updateBags(dt);
             netTick(time);
 
@@ -5669,7 +5850,22 @@
             }
             updateLootAim();
 
-            if (isTool) {
+            const holdingBow = !!(currentItem && currentItem.type === 'bow');
+            bowView.visible = holdingBow;
+            if (bowDraw.on && (!holdingBow || !controls.isLocked || gameState.isInventoryOpen || dead)) cancelDraw();
+            if (holdingBow) { // лук: левая рука держит, правая тянет тетиву к щеке, при отпускании — отдача
+                viewModel.visible = true; leftArm.visible = true; rightArm.visible = true;
+                stoneMesh.visible = false; blueprintGroup.visible = false; pickaxeGroup.visible = false; axeGroup.visible = false; malletGroup.visible = false; torchGroup.visible = false; spearGroup.visible = false;
+                if (bowDraw.on) bowDraw.t += dt;
+                if (bowDraw.recoil > 0) bowDraw.recoil = Math.max(0, bowDraw.recoil - dt);
+                const dp = bowDraw.on ? Math.min(1, bowDraw.t / 0.85) : 0, rc = bowDraw.recoil / 0.25;
+                bowView.userData.setDraw(dp, costHave('arrow') >= 1 && (bowDraw.on || bowDraw.recoil <= 0));
+                const sh = dp > 0.95 ? Math.sin(time * 0.05) * 0.004 : 0; // на полном натяжении рука чуть дрожит
+                bowView.position.set(-0.2 + sh, -0.12 + sh - rc * 0.02, -0.75 + rc * 0.06);
+                bowView.rotation.set(0.02, 0.12 - dp * 0.04, 0.06);
+                leftArm.position.set(-0.3, -0.42, -0.5); leftArm.rotation.set(1.15, -0.25, 0.2);
+                rightArm.position.set(-0.02, -0.42 + rc * 0.04, -0.6 + 0.25 * dp); rightArm.rotation.set(1.2, 0.5, -0.35);
+            } else if (isTool) {
                 viewModel.visible = true;
                 if (currentItem.type === 'stone' || currentItem.type === 'chertyozh') {
                     leftArm.visible = true; rightArm.visible = true;

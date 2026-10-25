@@ -30,7 +30,7 @@ const PLAYER_SAVE_DELAY_MS = 20000;
 const URGENT_MIN_GAP_MS = 5000;   // «срочное» сохранение (игрок вышел, умер, построил) — но не чаще раза в 5 секунд на мир
 const PLAYER_KEEP_MS = 30 * 24 * 3600 * 1000; // данные игрока, который не заходил 30 дней, стираем
 const MAX_PLAYER_RECORDS = 3000;
-const HELD_ITEMS = ['stone', 'pickaxe', 'axe', 'mallet', 'torch', 'chertyozh', 'spear'];
+const HELD_ITEMS = ['stone', 'pickaxe', 'axe', 'mallet', 'torch', 'chertyozh', 'spear', 'bow'];
 
 const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 
