@@ -492,6 +492,7 @@
             lock: { id: 'lock', icon: '🔒', name: 'Замок', maxStack: 5, isTool: false },
             bow: { id: 'bow', icon: '🏹', name: 'Лук', maxStack: 1, isTool: true },
             arrow: { id: 'arrow', icon: '↗️', name: 'Стрела', maxStack: 30, isTool: false },
+            iron_arrow: { id: 'iron_arrow', icon: '🗡️', name: 'Железная стрела', maxStack: 30, isTool: false },
             codelock: { id: 'codelock', icon: '🔐', name: 'Кодовый замок', maxStack: 5, isTool: false },
             door: { id: 'door', icon: '🚪', name: 'Дверь', maxStack: 5, isTool: false },
             cupboard: { id: 'cupboard', icon: '🗄️', name: 'Шкаф', maxStack: 5, isTool: false },
@@ -541,6 +542,11 @@
                 id: 'arrow', name: 'Стрела (×4)', icon: '↗️',
                 ingredients: { stone_material: 5, wood: 5 },
                 result: { type: 'arrow', count: 4, icon: '↗️', isTool: false }
+            },
+            {
+                id: 'iron_arrow', name: 'Железная стрела (×4)', icon: '🗡️',
+                ingredients: { metal_material: 5, wood: 5 },
+                result: { type: 'iron_arrow', count: 4, icon: '🗡️', isTool: false }
             },
             {
                 id: 'codelock', name: 'Кодовый замок', icon: '🔐',
@@ -1136,11 +1142,11 @@
         rightArm.add(spearGroup);
 
         // --- ЛУК и СТРЕЛА (модель собрана из простых деталей) ---
-        function buildArrowMesh() { // стрела смотрит вдоль -Z; начало координат — у оперения
+        function buildArrowMesh(iron) { // стрела смотрит вдоль -Z; начало координат — у оперения (железная — серая, с крупным наконечником)
             const g = new THREE.Group();
-            const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.9, 6), new THREE.MeshLambertMaterial({ color: 0xc9a36a, flatShading: true }));
+            const shaft = new THREE.Mesh(new THREE.CylinderGeometry(iron ? 0.016 : 0.012, iron ? 0.016 : 0.012, 0.9, 6), new THREE.MeshLambertMaterial({ color: iron ? 0x8c9098 : 0xc9a36a, flatShading: true }));
             shaft.rotation.x = Math.PI / 2; shaft.position.z = -0.45; g.add(shaft);
-            const head = new THREE.Mesh(new THREE.ConeGeometry(0.03, 0.13, 6), new THREE.MeshLambertMaterial({ color: 0x80848c, flatShading: true }));
+            const head = new THREE.Mesh(new THREE.ConeGeometry(iron ? 0.04 : 0.03, iron ? 0.18 : 0.13, 6), new THREE.MeshLambertMaterial({ color: iron ? 0x3d4148 : 0x80848c, flatShading: true }));
             head.rotation.x = -Math.PI / 2; head.position.z = -0.96; g.add(head);
             const fm = new THREE.MeshLambertMaterial({ color: 0xe4e0d4, flatShading: true });
             const f1 = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.004, 0.14), fm); f1.position.z = -0.09; g.add(f1);
@@ -1154,19 +1160,16 @@
             const strM = new THREE.MeshBasicMaterial({ color: 0xece6d2 });
             const H = 0.9, TZ = 0.16, N = 8, UP = new THREE.Vector3(0, 1, 0);
             const unit = new THREE.CylinderGeometry(1, 1, 1, 5);
-            const limbs = []; for (let i = 0; i < N; i++) { const m = new THREE.Mesh(unit, wood); g.add(m); limbs.push(m); }
+            const pts = []; for (let i = 0; i <= 12; i++) { const t = -1 + 2 * i / 12; pts.push(new THREE.Vector3(0, t * H, TZ * t * t)); }
+            const tube = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 24, 0.032, 6, false), wood); g.add(tube); // дуга лука — один изогнутый цилиндр одного цвета
             const sTop = new THREE.Mesh(unit, strM), sBot = new THREE.Mesh(unit, strM); g.add(sTop); g.add(sBot);
-            const grip = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.26, 0.09), gripM); g.add(grip);
+            const grip = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.26, 0.09), wood); g.add(grip);
             const arrow = buildArrowMesh(); g.add(arrow);
             const a = new THREE.Vector3(), b = new THREE.Vector3(), d = new THREE.Vector3(), nock = new THREE.Vector3(), tipT = new THREE.Vector3(), tipB = new THREE.Vector3();
             function seg(m, p, q, r) { m.position.copy(p).add(q).multiplyScalar(0.5); d.copy(q).sub(p); const len = d.length() || 1e-4; m.scale.set(r, len, r); m.quaternion.setFromUnitVectors(UP, d.divideScalar(len)); }
             g.userData.setDraw = (dp, showArrow) => {
                 const tz = TZ + 0.07 * dp, h = H * (1 - 0.06 * dp); // чем сильнее тянем, тем больше изгиб плеч
-                for (let i = 0; i < N; i++) {
-                    const t0 = -1 + 2 * i / N, t1 = -1 + 2 * (i + 1) / N;
-                    a.set(0, t0 * h, tz * t0 * t0); b.set(0, t1 * h, tz * t1 * t1);
-                    seg(limbs[i], a, b, 0.034 - 0.017 * Math.abs((t0 + t1) / 2));
-                }
+                tube.scale.set(1, 1 - 0.06 * dp, 1 + 0.44 * dp); // одна изогнутая дуга: при натяжении сильнее выгибается
                 tipT.set(0, h, tz); tipB.set(0, -h, tz); nock.set(0, 0, tz + 0.04 + 0.5 * dp);
                 seg(sTop, tipT, nock, 0.006); seg(sBot, nock, tipB, 0.006);
                 arrow.visible = !!showArrow; arrow.position.set(0, 0, nock.z);
@@ -3425,6 +3428,7 @@
             }
             if (e.code === 'KeyR' && !e.repeat && controls.isLocked && !gameState.isInventoryOpen && !netLoading()) { // R — повернуть шкаф, печь или лестницу в руках на 90°
                 const it = gameState.inventory[gameState.selectedSlot];
+                if (it && it.type === 'bow' && !bowDraw.on) { bowAmmoPref = bowAmmoPref === 'arrow' ? 'iron_arrow' : 'arrow'; flashDoorHint('Стрелы: ' + (bowAmmoPref === 'arrow' ? 'обычные' : 'железные') + ' (R — сменить)'); }
                 if (it && (it.type === 'cupboard' || it.type === 'furnace' || it.type === 'sleepbag' || (it.type === 'chertyozh' && buildMode === 'stair'))) placeRotStep = (placeRotStep + 1) % 4;
             }
             if (e.code === 'KeyG' && !e.repeat && !netLoading()) toggleMap(); // KeyG — это и «G», и «П» на русской раскладке
@@ -3449,24 +3453,29 @@
 
         // ---------- лук: натяжение, выстрел и полёт стрел ----------
         const isHoldingBow = () => { const it = gameState.inventory[gameState.selectedSlot]; return !!(it && it.type === 'bow'); };
+        let bowAmmoPref = 'arrow'; // какие стрелы берём первыми (R — переключить)
+        function pickAmmo() { const other = bowAmmoPref === 'arrow' ? 'iron_arrow' : 'arrow'; if (costHave(bowAmmoPref) >= 1) return bowAmmoPref; if (costHave(other) >= 1) return other; return null; }
         function startDraw() {
             if (bowDraw.on || gameState.attackCooldown > 0 || gameState.isInventoryOpen || netLoading() || dead) return;
-            if (costHave('arrow') < 1) { flashDoorHint('Нет стрел — скрафти их (камень + дерево)'); return; }
-            bowDraw.on = true; bowDraw.t = 0; netSend({ t: 'draw', on: 1 }); sfx('bowdraw');
+            const ammo = pickAmmo();
+            if (!ammo) { flashDoorHint('Нет стрел — скрафти их (камень + дерево)'); return; }
+            bowDraw.ammo = ammo; bowDraw.full = ammo === 'iron_arrow' ? 1.3 : 0.85; // железные тянутся дольше
+            bowDraw.on = true; bowDraw.t = 0; netSend({ t: 'draw', on: 1, ir: ammo === 'iron_arrow' ? 1 : 0 }); sfx('bowdraw');
         }
         function cancelDraw() { if (!bowDraw.on) return; bowDraw.on = false; netSend({ t: 'draw', on: 0 }); }
         function releaseBow() {
             if (!bowDraw.on) return;
             bowDraw.on = false; netSend({ t: 'draw', on: 0 });
-            if (bowDraw.t < 0.25 || costHave('arrow') < 1) return; // слишком слабо потянул — стрела не вылетает
-            const power = Math.min(1, bowDraw.t / 0.85);
-            costSpend('arrow', 1); updateUI();
+            const ammo = bowDraw.ammo || 'arrow', iron = ammo === 'iron_arrow';
+            if (bowDraw.t < 0.25 || costHave(ammo) < 1) return; // слишком слабо потянул — стрела не вылетает
+            const power = Math.min(1, bowDraw.t / (bowDraw.full || 0.85));
+            costSpend(ammo, 1); updateUI();
             const dir = new THREE.Vector3(); camera.getWorldDirection(dir);
             const right = new THREE.Vector3().crossVectors(dir, camera.up).normalize();
             const o = camera.position.clone().addScaledVector(dir, 0.9).addScaledVector(right, 0.1); o.y -= 0.15;
-            const v = dir.clone().multiplyScalar(40 + 60 * power); // чем дольше тянул, тем быстрее и дальше летит
-            spawnArrow(o, v, true);
-            netSend({ t: 'arrow', x: r2(o.x), y: r2(o.y), z: r2(o.z), vx: r2(v.x), vy: r2(v.y), vz: r2(v.z) });
+            const v = dir.clone().multiplyScalar((40 + 60 * power) * (iron ? 0.75 : 1)); // чем дольше тянул, тем быстрее и дальше летит; железная медленнее
+            spawnArrow(o, v, true, iron);
+            netSend({ t: 'arrow', x: r2(o.x), y: r2(o.y), z: r2(o.z), vx: r2(v.x), vy: r2(v.y), vz: r2(v.z), ir: iron ? 1 : 0 });
             bowDraw.recoil = 0.25; gameState.attackCooldown = 0.4; sfx('bowshot');
         }
         const arrows = [], ARROW_G = 10, arrowRay = new THREE.Raycaster();
@@ -3482,9 +3491,9 @@
             return arrowStatic;
         }
         function removeArrow(a) { scene.remove(a.mesh); const i = arrows.indexOf(a); if (i >= 0) arrows.splice(i, 1); }
-        function spawnArrow(o, v, mine) {
-            const mesh = buildArrowMesh(); mesh.position.copy(o); scene.add(mesh);
-            arrows.push({ mesh, p: o.clone(), v: v.clone(), mine, t: 0, stuck: false, life: 0 });
+        function spawnArrow(o, v, mine, iron) {
+            const mesh = buildArrowMesh(iron); mesh.position.copy(o); scene.add(mesh);
+            arrows.push({ mesh, p: o.clone(), v: v.clone(), mine, iron: !!iron, t: 0, stuck: false, life: 0 });
             if (arrows.length > 60) removeArrow(arrows[0]);
         }
         function updateArrows(dt, now) {
@@ -3517,7 +3526,7 @@
                     if (o) {
                         const head = best.object.parent === o.userData.head;
                         spawnBlood(best.point.x, best.point.y, best.point.z, head ? 16 : 11);
-                        netSend({ t: 'atk', target: o.userData.playerId, head, px: r2(best.point.x), py: r2(best.point.y), pz: r2(best.point.z) });
+                        netSend({ t: 'atk', target: o.userData.playerId, head, ir: a.iron ? 1 : 0, px: r2(best.point.x), py: r2(best.point.y), pz: r2(best.point.z) });
                         flashHitMarker(head);
                     }
                     removeArrow(a);
@@ -3525,7 +3534,7 @@
                     let o = best.object; while (o && !o.userData.bearId) o = o.parent;
                     if (o) {
                         spawnBlood(best.point.x, best.point.y, best.point.z, 11);
-                        netSend({ t: 'bearhit', id: o.userData.bearId, head: !!best.object.userData.head });
+                        netSend({ t: 'bearhit', id: o.userData.bearId, head: !!best.object.userData.head, ir: a.iron ? 1 : 0 });
                         flashHitMarker(false);
                     }
                     removeArrow(a);
@@ -4138,7 +4147,7 @@
             ud.armL.pivot.rotation.x = restRotXL + (ud.heldType === 'stone' ? swing * 0.6 * sgnL : 0);
             if (ud.heldType === 'bow') { // натягивает тетиву: левая рука тянется к щеке, тетива и стрела следуют за ней
                 ud.drawT = (ud.drawT || 0) + dt;
-                const dp = ud.drawing ? Math.min(1, ud.drawT / 0.85) : 0;
+                const dp = ud.drawing ? Math.min(1, ud.drawT / (ud.drawFull || 0.85)) : 0;
                 ud.armL.pivot.rotation.x = restRotXL + dp * 0.6; ud.armL.pivot.rotation.y = -dp * 0.7; ud.armL.pivot.position.z -= dp * 0.25;
                 if (ud.bowObj) ud.bowObj.userData.setDraw(dp, !!ud.drawing);
             }
@@ -4482,7 +4491,7 @@
             }
             updateUI();
         }
-        const plBackupKey = () => 'nw_pl_' + GAME_SERVER + '_' + worldId + '_' + (localStorage.getItem('nw_tok') || '').slice(0, 12);
+        const plBackupKey = () => 'nw_pl_' + GAME_SERVER + '_' + worldId + '_' + ((account && account.name) ? account.name.toLowerCase() : (localStorage.getItem('nw_tok') || '').slice(0, 12));
         function tryApplySavedPlayer() { // вызывается, когда мир уже загружен (у хозяина и у остальных)
             if (!peer || !peer.isWS || !role) return;
             if (playerSyncWorld !== worldId) { // только первый вход в этот мир за сессию; при переподключении ничего не откатываем
@@ -4918,8 +4927,8 @@
                     (msg.p || []).forEach(p => { if (p.id !== myId) applyRemoteState(p.id, p); });
                     break;
                 case 'swing': remoteSwing(msg.id); break;
-                case 'arrowv': if (msg.id !== myId && [msg.x, msg.y, msg.z].every(v => isNum(v, 2000)) && [msg.vx, msg.vy, msg.vz].every(v => isNum(v, 200))) { spawnArrow(new THREE.Vector3(msg.x, msg.y, msg.z), new THREE.Vector3(msg.vx, msg.vy, msg.vz), false); sfx('bowshot', { x: msg.x, y: msg.y, z: msg.z }); } break;
-                case 'drawv': { const rp = remotePlayers.get(msg.id); if (rp && rp.model) { rp.model.userData.drawing = !!msg.on; rp.model.userData.drawT = 0; } break; }
+                case 'arrowv': if (msg.id !== myId && [msg.x, msg.y, msg.z].every(v => isNum(v, 2000)) && [msg.vx, msg.vy, msg.vz].every(v => isNum(v, 200))) { spawnArrow(new THREE.Vector3(msg.x, msg.y, msg.z), new THREE.Vector3(msg.vx, msg.vy, msg.vz), false, !!msg.ir); sfx('bowshot', { x: msg.x, y: msg.y, z: msg.z }); } break;
+                case 'drawv': { const rp = remotePlayers.get(msg.id); if (rp && rp.model) { rp.model.userData.drawing = !!msg.on; rp.model.userData.drawT = 0; rp.model.userData.drawFull = msg.ir ? 1.3 : 0.85; } break; }
                 case 'hit': applyRemoteHit(msg.id, msg.hits, true); break;
                 case 'leave': removeRemotePlayer(msg.id); break;
                 case 'dmg': if (isNum(msg.d, 100) && msg.d > 0) applyDamage(msg.d, !!msg.kill); break;
@@ -5032,7 +5041,7 @@
                     if (!v || !v.state || v.dead || v.god) return;
                     const now = performance.now();
                     if (now - (p.lastAtk || 0) < 250) return; p.lastAtk = now;
-                    const base = DAMAGE[p.state.item];
+                    const base = DAMAGE[p.state.item] * (p.state.item === 'bow' && m.ir === 1 ? 2 : 1); // железная стрела бьёт вдвое сильнее
                     if (!base) return;
                     const a = p.state, b = v.state;
                     if (Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z) > meleeRange(a.item) + 3) return;
@@ -5059,12 +5068,12 @@
                 case 'arrow': { // выстрел из лука: показываем полёт стрелы остальным (попадания считает сам стрелок)
                     if (![m.x, m.y, m.z].every(v => isNum(v, 2000)) || ![m.vx, m.vy, m.vz].every(v => isNum(v, 200)) || !p.state || p.state.item !== 'bow') return;
                     const nowA = performance.now(); if (nowA - (p.lastArrow || 0) < 300) return; p.lastArrow = nowA;
-                    const am = { t: 'arrowv', id: fromId, x: m.x, y: m.y, z: m.z, vx: m.vx, vy: m.vy, vz: m.vz };
+                    const am = { t: 'arrowv', id: fromId, x: m.x, y: m.y, z: m.z, vx: m.vx, vy: m.vy, vz: m.vz, ir: m.ir ? 1 : 0 };
                     hostBroadcast(am, fromId); if (fromId !== myId) handleNetMessage(am);
                     break;
                 }
                 case 'draw': { // игрок натягивает/отпускает тетиву — остальные видят это на его модели
-                    const dm = { t: 'drawv', id: fromId, on: m.on ? 1 : 0 };
+                    const dm = { t: 'drawv', id: fromId, on: m.on ? 1 : 0, ir: m.ir ? 1 : 0 };
                     hostBroadcast(dm, fromId); if (fromId !== myId) handleNetMessage(dm);
                     break;
                 }
@@ -5273,7 +5282,7 @@
                     if (!b || !p.state) return;
                     const nowB = performance.now();
                     if (nowB - (p.lastBearHit || 0) < 250) return; p.lastBearHit = nowB;
-                    const base = DAMAGE[p.state.item];
+                    const base = DAMAGE[p.state.item] * (p.state.item === 'bow' && m.ir === 1 ? 2 : 1); // железная стрела бьёт вдвое сильнее
                     if (!base || Math.hypot(p.state.x - b.x, p.state.z - b.z) > meleeRange(p.state.item) + 4.5) return;
                     b.hp -= base * (m.head ? HEAD_MULT : 1);
                     if (b.hp <= 0) { hostAll({ t: 'bearkill', id: b.id }); bearSpawnAt.push(Date.now() + BEAR_RESPAWN_S * 1000); }
@@ -5858,13 +5867,13 @@
                 stoneMesh.visible = false; blueprintGroup.visible = false; pickaxeGroup.visible = false; axeGroup.visible = false; malletGroup.visible = false; torchGroup.visible = false; spearGroup.visible = false;
                 if (bowDraw.on) bowDraw.t += dt;
                 if (bowDraw.recoil > 0) bowDraw.recoil = Math.max(0, bowDraw.recoil - dt);
-                const dp = bowDraw.on ? Math.min(1, bowDraw.t / 0.85) : 0, rc = bowDraw.recoil / 0.25;
-                bowView.userData.setDraw(dp, costHave('arrow') >= 1 && (bowDraw.on || bowDraw.recoil <= 0));
+                const dp = bowDraw.on ? Math.min(1, bowDraw.t / (bowDraw.full || 0.85)) : 0, rc = bowDraw.recoil / 0.25;
+                bowView.userData.setDraw(dp, !!pickAmmo() && (bowDraw.on || bowDraw.recoil <= 0));
                 const sh = dp > 0.95 ? Math.sin(time * 0.05) * 0.004 : 0; // на полном натяжении рука чуть дрожит
-                bowView.position.set(-0.2 + sh, -0.12 + sh - rc * 0.02, -0.75 + rc * 0.06);
-                bowView.rotation.set(0.02, 0.12 - dp * 0.04, 0.06);
-                leftArm.position.set(-0.3, -0.42, -0.5); leftArm.rotation.set(1.15, -0.25, 0.2);
-                rightArm.position.set(-0.02, -0.42 + rc * 0.04, -0.6 + 0.25 * dp); rightArm.rotation.set(1.2, 0.5, -0.35);
+                bowView.position.set(0.2 + sh, -0.12 + sh - rc * 0.02, -0.75 + rc * 0.06);
+                bowView.rotation.set(0.02, -0.12 + dp * 0.04, -0.06);
+                rightArm.position.set(0.3, -0.42, -0.5); rightArm.rotation.set(1.15, 0.25, -0.2); // правая рука держит лук
+                leftArm.position.set(0.02, -0.42 + rc * 0.04, -0.6 + 0.25 * dp); leftArm.rotation.set(1.2, -0.5, 0.35); // левая тянет тетиву
             } else if (isTool) {
                 viewModel.visible = true;
                 if (currentItem.type === 'stone' || currentItem.type === 'chertyozh') {

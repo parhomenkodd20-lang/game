@@ -211,6 +211,7 @@ function cleanNick(s) {
 const isNum = (v, lim) => typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= lim;
 // Публичный id игрока = короткий хеш его секретного токена (токен хранится в браузере). Так владелец двери/шкафа
 // остаётся тем же человеком после перезахода, а подделать чужой id нельзя — секрет не передаётся другим.
+function idFromName(name) { return 'u' + crypto.createHash('sha256').update('nw-acc|' + nameKey(name)).digest('hex').slice(0, 10); }
 function idFromToken(tok) { return 'u' + crypto.createHash('sha256').update('nw|' + tok).digest('hex').slice(0, 10); }
 function sendHost(w, obj) { if (w.host && w.host.alive) w.host.send(obj); }
 
@@ -252,7 +253,7 @@ function handleMessage(c, m) {
         if (typeof m.tok !== 'string' || !/^[A-Za-z0-9_-]{16,64}$/.test(m.tok)) { c.send({ k: 'err', type: 'bad-token' }); return; }
         const acc = accByTok.get(m.tok);
         if (!acc) { c.send({ k: 'err', type: 'no-account' }); return; } // заходить можно только с аккаунтом
-        const id = idFromToken(m.tok);
+        const id = acc.admin ? idFromName(acc.name) : idFromToken(m.tok); // у админа личный ключ меняется при каждом перезапуске сервера, а id должен быть постоянным — иначе пропадают его вещи, место и замки
         const old = w.players.get(id);
         if (old) { old.send({ k: 'err', type: 'replaced' }); old.kill(); } // тот же игрок зашёл с другой вкладки/после обрыва — старое соединение закрываем
         if (w.players.size >= MAX_PLAYERS) { c.send({ k: 'err', type: 'full' }); return; }
