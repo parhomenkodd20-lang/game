@@ -5535,11 +5535,17 @@
 
         // ---------- выйти с сервера: сохраняем себя и мир, потом возвращаемся на главный экран ----------
         function leaveServer() {
-            try { sendPlayerData(true); } catch (_) {}
-            try { saveWorldNow(peer); } catch (_) {}
-            try { cacheWorldLocally(); } catch (_) {}
-            try { if (peer) peer.destroy(); } catch (_) {}
-            setTimeout(() => location.reload(), 300);
+            const ov = document.createElement('div'); // «Сохраняю…» — не закрываем игру мгновенно, чтобы всё успело сохраниться
+            ov.style.cssText = 'position:fixed;inset:0;z-index:200;background:rgba(10,14,20,0.88);color:#fff;display:flex;align-items:center;justify-content:center;font:700 24px sans-serif;';
+            ov.textContent = '💾 Сохраняю прогресс…'; document.body.appendChild(ov);
+            const doSave = () => {
+                try { sendPlayerData(true); } catch (_) {}
+                try { lastSavedJson = ''; saveWorldNow(peer, true); } catch (_) {}
+                try { cacheWorldLocally(); } catch (_) {}
+            };
+            doSave(); setTimeout(doSave, 700); // второй раз для надёжности
+            setTimeout(() => { ov.textContent = '✅ Сохранено'; }, 1500);
+            setTimeout(() => { try { if (peer) peer.destroy(); } catch (_) {} location.reload(); }, 2000);
         }
         document.getElementById('pause-leave').addEventListener('click', () => { document.getElementById('pause-leave').disabled = true; leaveServer(); });
         refreshAccountUI();
