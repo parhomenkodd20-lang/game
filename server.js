@@ -118,7 +118,7 @@ async function persistPlayers(w) {
 const ITEM_TYPE = /^[a-z0-9_]{1,32}$/;
 function cleanPlayerRec(m, nick) {
     if (!Array.isArray(m.inv) || m.inv.length > 40) return null;
-    const inv = m.inv.map(it => (it && typeof it.type === 'string' && ITEM_TYPE.test(it.type) && Number.isInteger(it.count) && it.count >= 1 && it.count <= 999) ? { type: it.type, count: it.count } : null);
+    const inv = m.inv.map(it => (it && typeof it.type === 'string' && ITEM_TYPE.test(it.type) && Number.isInteger(it.count) && it.count >= 1 && it.count <= 30) ? { type: it.type, count: it.count } : null);
     if (!isNum(m.x, 2000) || !isNum(m.y, 500) || !isNum(m.z, 2000) || !isNum(m.yaw, 10) || !isNum(m.pitch, 10)) return null;
     return { inv, sel: Number.isInteger(m.sel) && m.sel >= 0 && m.sel < 40 ? m.sel : 0, dead: !!m.dead, x: m.x, y: m.y, z: m.z, yaw: m.yaw, pitch: m.pitch, nick: nick || '', at: Date.now() };
 }
@@ -206,7 +206,7 @@ class Conn {
 // Логика
 // ---------------------------------------------------------------------
 function cleanNick(s) {
-    return Array.from(String(s || '').replace(/[\u0000-\u001f\u007f<>]/g, '').replace(/\s+/g, ' ').trim()).slice(0, 15).join('').trim();
+    return Array.from(String(s || '').replace(/[\u0000-\u001f\u007f<>\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180e\u200b-\u200f\u202a-\u202e\u2060-\u206f\u3164\ufe00-\ufe0f\ufeff\uffa0]/g, '').replace(/\s+/g, ' ').trim()).slice(0, 15).join('').trim();
 }
 const isNum = (v, lim) => typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= lim;
 // Публичный id игрока = короткий хеш его секретного токена (токен хранится в браузере). Так владелец двери/шкафа
@@ -254,6 +254,8 @@ function handleMessage(c, m) {
         const acc = accByTok.get(m.tok);
         if (!acc) { c.send({ k: 'err', type: 'no-account' }); return; } // заходить можно только с аккаунтом
         const id = acc.admin ? idFromName(acc.name) : idFromToken(m.tok); // у админа личный ключ меняется при каждом перезапуске сервера, а id должен быть постоянным — иначе пропадают его вещи, место и замки
+        if (m.host && w.host && w.host.id !== id) { c.send({ k: 'err', type: 'unavailable-id' }); return; } // хозяин уже есть — отказ, а старое соединение этого же игрока не трогаем
+        if (m.host && w.hostGrace && w.hostGrace.id !== id) { c.send({ k: 'err', type: 'unavailable-id' }); return; }
         const old = w.players.get(id);
         if (old) { old.send({ k: 'err', type: 'replaced' }); old.kill(); } // тот же игрок зашёл с другой вкладки/после обрыва — старое соединение закрываем
         if (w.players.size >= MAX_PLAYERS) { c.send({ k: 'err', type: 'full' }); return; }
@@ -418,7 +420,13 @@ const rlHits = new Map(); // защита от подбора пароля и с
 function rlCount(key, windowMs) { const now = Date.now(); const a = (rlHits.get(key) || []).filter(t => now - t < windowMs); rlHits.set(key, a); return a.length; }
 function rlHit(key) { const a = rlHits.get(key) || []; a.push(Date.now()); rlHits.set(key, a); }
 setInterval(() => { const now = Date.now(); for (const [k, a] of rlHits) if (!a.length || now - a[a.length - 1] > 3600000) rlHits.delete(k); }, 600000);
-function clientIp(req) { return String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || '?'; }
+function clientIp(req) { // левая часть X-Forwarded-For приходит от самого игрока и подделывается — берём адрес, который дописал наш прокси (Cloudflare/Render)
+    const cf = String(req.headers['cf-connecting-ip'] || req.headers['true-client-ip'] || '').trim();
+    if (cf) return cf;
+    const parts = String(req.headers['x-forwarded-for'] || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (parts.length >= 2) return parts[parts.length - 2];
+    return parts[0] || req.socket.remoteAddress || '?';
+}
 function sendJson(res, code, obj) { res.writeHead(code, { ...CORS, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(obj)); }
 function handleAuth(req, res, kind) {
     let body = '', big = false;
@@ -441,7 +449,7 @@ function handleAuth(req, res, kind) {
                 if (ex) { // имя занято: если пароль тот же — это просто вход в свой аккаунт, иначе отказ
                     const h = Buffer.from(hashPass(pass, ex.salt), 'hex'), a = Buffer.from(ex.hash, 'hex');
                     if (h.length === a.length && crypto.timingSafeEqual(h, a)) return sendJson(res, 200, { ok: true, name: ex.name, tok: ex.tok });
-                    return sendJson(res, 409, { err: 'taken' });
+                    rlHit('n' + key); return sendJson(res, 409, { err: 'taken' });
                 }
                 // токен этого устройства (если ещё ничей) становится токеном аккаунта — тогда прежние постройки и вещи останутся за игроком
                 const tok = (typeof b.tok === 'string' && /^[A-Za-z0-9_-]{16,64}$/.test(b.tok) && !accByTok.has(b.tok)) ? b.tok : crypto.randomBytes(20).toString('hex');
@@ -453,11 +461,11 @@ function handleAuth(req, res, kind) {
                 console.log('Новый аккаунт: ' + name);
                 return sendJson(res, 200, { ok: true, name, tok });
             }
-            if (rlCount('f' + ip, 600000) >= 8) return sendJson(res, 429, { err: 'rate' });
+            if (rlCount('f' + ip, 600000) >= 8 || rlCount('n' + key, 900000) >= 12) return sendJson(res, 429, { err: 'rate' }); // и по адресу, и по имени: подбор пароля не обойти сменой адреса
             const acc = accByName.get(key);
             let ok = false;
             if (acc) { const h = Buffer.from(hashPass(pass, acc.salt), 'hex'), a = Buffer.from(acc.hash, 'hex'); ok = h.length === a.length && crypto.timingSafeEqual(h, a); }
-            if (!ok) { rlHit('f' + ip); return sendJson(res, 401, { err: 'bad' }); }
+            if (!ok) { rlHit('f' + ip); rlHit('n' + key); return sendJson(res, 401, { err: 'bad' }); }
             return sendJson(res, 200, { ok: true, name: acc.name, tok: acc.tok });
         } catch (e) { console.error('auth', e); sendJson(res, 500, { err: 'server' }); }
     });

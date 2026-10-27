@@ -5032,6 +5032,7 @@
                     break;
                 case 'hit':
                     if (typeof m.id !== 'string' || !RESOURCE_ID.test(m.id) || !Number.isInteger(m.hits) || m.hits < 1 || m.hits > RESOURCE_HP) return;
+                    { const rr = resources.get(m.id); if (!rr || rr.gone) return; if (p.state && Math.hypot(p.state.x - rr.obj.position.x, p.state.z - rr.obj.position.z) > 16) return; if (m.hits > (rr.obj.userData.hitCount || 0) + 2) return; } // бьют только то, что рядом, и не быстрее настоящего удара
                     if (fromId !== myId) applyRemoteHit(m.id, m.hits, true);
                     hostBroadcast({ t: 'hit', id: m.id, hits: m.hits }, fromId);
                     break;
@@ -5041,10 +5042,11 @@
                     if (!v || !v.state || v.dead || v.god) return;
                     const now = performance.now();
                     if (now - (p.lastAtk || 0) < 250) return; p.lastAtk = now;
-                    const base = DAMAGE[p.state.item] * (p.state.item === 'bow' && m.ir === 1 ? 2 : 1); // железная стрела бьёт вдвое сильнее
+                    let base = DAMAGE[p.state.item];
                     if (!base) return;
                     const a = p.state, b = v.state;
-                    if (Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z) > meleeRange(a.item) + 3) return;
+                    if (a.item === 'bow') { const cr = takeArrowCredit(p, b.x, b.y - 1.2, b.z, now); if (!cr) return; if (cr.ir) base *= 2; } // лук: нужна настоящая стрела, летящая в этого игрока
+                    else if (Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z) > meleeRange(a.item) + 3) return;
                     const head = !!m.head;
                     const dmg = base * (head ? HEAD_MULT : 1);
                     let killed = false;
@@ -5053,7 +5055,7 @@
                         v.hpAt = now; v.hurtAt = now;
                         if (hpLeft <= 0) { // смертельный удар: тело пропадает у всех сразу, не ждём ответа жертвы
                             killed = true;
-                            v.hp = MAX_HP; v.protUntil = now + RESPAWN_PROTECT_MS; v.lastDied = now;
+                            v.hp = MAX_HP; v.protUntil = now + RESPAWN_PROTECT_MS; v.lastDied = now; v.dead = true;
                             if (m.target !== myId) remoteDied(m.target, b.x, b.y, b.z);
                             hostBroadcast({ t: 'died', id: m.target, x: b.x, y: b.y, z: b.z });
                         } else v.hp = hpLeft;
@@ -5067,7 +5069,10 @@
                 }
                 case 'arrow': { // выстрел из лука: показываем полёт стрелы остальным (попадания считает сам стрелок)
                     if (![m.x, m.y, m.z].every(v => isNum(v, 2000)) || ![m.vx, m.vy, m.vz].every(v => isNum(v, 200)) || !p.state || p.state.item !== 'bow') return;
-                    const nowA = performance.now(); if (nowA - (p.lastArrow || 0) < 300) return; p.lastArrow = nowA;
+                    const nowA = performance.now(); if (nowA - (p.lastArrow || 0) < 500) return; p.lastArrow = nowA;
+                    const spd = Math.hypot(m.vx, m.vy, m.vz);
+                    if (spd > 105 || spd < 5 || (m.ir === 1 && spd > 76) || Math.hypot(m.x - p.state.x, m.y - p.state.y, m.z - p.state.z) > 5) return; // скорость и место вылета должны быть как у настоящего выстрела
+                    (p.arrowCr = p.arrowCr || []).push({ t: nowA, x: m.x, y: m.y, z: m.z, vx: m.vx, vy: m.vy, vz: m.vz, ir: m.ir === 1 ? 1 : 0 }); if (p.arrowCr.length > 8) p.arrowCr.shift();
                     const am = { t: 'arrowv', id: fromId, x: m.x, y: m.y, z: m.z, vx: m.vx, vy: m.vy, vz: m.vz, ir: m.ir ? 1 : 0 };
                     hostBroadcast(am, fromId); if (fromId !== myId) handleNetMessage(am);
                     break;
@@ -5080,24 +5085,29 @@
                 case 'god': { p.god = !!m.on; break; } // админ включил/выключил бессмертие: урон ему не засчитываем
                 case 'respawned': { // игрок выбрал, где возродиться — снова живой
                     const nowR = performance.now();
+                    if (!p.dead || nowR - (p.lastDied || 0) < 600) return; // возродиться можно только после смерти — иначе «возрождение» давало бы вечную неуязвимость
                     p.dead = false; p.protUntil = nowR + RESPAWN_PROTECT_MS; p.hp = MAX_HP; p.hpAt = nowR; p.lastDied = nowR;
                     break;
                 }
                 case 'died': { // игрок погиб — сразу рассылаем, не дожидаясь обычного обновления позиций
                     if (!p.state || !isNum(m.x, 2000) || !isNum(m.y, 500) || !isNum(m.z, 2000)) return;
                     const nowD = performance.now();
+                    if (p.pendingBag) { const pb = p.pendingBag; p.pendingBag = null; if (nowD - pb.t < 3000 && nowD - (p.lastBagMade || 0) >= 6000) { p.lastBagMade = nowD; hostAll(pb.msg); } } // сумка падает только вместе со смертью
                     if (nowD - (p.lastDied || 0) < 1000) return; p.lastDied = nowD; p.dead = true;
                     if (fromId !== myId) remoteDied(fromId, m.x, m.y, m.z);
                     hostBroadcast({ t: 'died', id: fromId, x: m.x, y: m.y, z: m.z }, fromId);
                     break;
                 }
                 case 'bag': { // игрок погиб — на его месте появляется сумка
-                    if (!isNum(m.x, 2000) || !isNum(m.z, 2000) || !Array.isArray(m.items)) return;
+                    if (!isNum(m.x, 2000) || !isNum(m.z, 2000) || !Array.isArray(m.items) || !p.state) return;
+                    if (Math.hypot(m.x - p.state.x, m.z - p.state.z) > 15) return; // сумка падает там, где игрок
                     const now = performance.now();
                     if (now - (p.lastBag || 0) < 1500) return; p.lastBag = now;
                     const items = m.items.slice(0, 25).map(sanitizeItem).filter(Boolean);
                     if (!items.length) return;
-                    hostAll({ t: 'bagset', id: 'bag_' + (++bagSeq) + '_' + Math.floor(Math.random() * 1e6), x: m.x, y: isNum(m.y, 500) ? m.y : undefined, z: m.z, items });
+                    const bagMsg = { t: 'bagset', id: 'bag_' + (++bagSeq) + '_' + Math.floor(Math.random() * 1e6), x: m.x, y: isNum(m.y, 500) ? m.y : undefined, z: m.z, items };
+                    if (now - (p.lastDied || 0) < 6000) { if (now - (p.lastBagMade || 0) >= 6000) { p.lastBagMade = now; hostAll(bagMsg); } } // смерть уже зафиксирована (убил другой игрок)
+                    else p.pendingBag = { msg: bagMsg, t: now }; // ждём сообщения о смерти — без него сумка не появится
                     break;
                 }
                 case 'take': { // игрок забирает предмет из сумки
@@ -5215,7 +5225,7 @@
                         const nw = tcUnits(t.wood + (m.type === 'wood' ? amt : 0)), ns = tcUnits(t.stone + (m.type === 'wood' ? 0 : amt));
                         ok = Math.ceil(nw / 20) + Math.ceil(ns / 20) <= TC_SLOTS;
                     }
-                    if (!ok) { sendTo(fromId, { t: 'given', type: m.type, count: amt }); break; }
+                    if (!ok) { if (refundOk(p, amt)) sendTo(fromId, { t: 'given', type: m.type, count: amt }); break; }
                     if (m.type === 'wood') t.wood += amt; else t.stone += amt;
                     hostAll({ t: 'tcstock', id: t.id, wood: t.wood, stone: t.stone });
                     break;
@@ -5241,7 +5251,7 @@
                     let left = amt;
                     if (near && m.slot === 'wood' && m.type === 'wood') { const add = Math.min(left, FURN_WOOD_MAX - f.wood); f.wood += add; left -= add; }
                     else if (near && m.slot === 'cells' && FURN_RECIPES[m.type]) { const sim = f.cells.slice(); while (sim.length < FURN_CELLS) sim.push(null); let k = 0; while (k < left && cellsAdd(sim, m.type, 1)) k++; f.cells = sim; left -= k; }
-                    if (left > 0) sendTo(fromId, { t: 'given', type: m.type, count: left });
+                    if (left > 0 && refundOk(p, left)) sendTo(fromId, { t: 'given', type: m.type, count: left });
                     if (left < amt) hostAll(furnaceStateMsg(f));
                     break;
                 }
@@ -5282,8 +5292,10 @@
                     if (!b || !p.state) return;
                     const nowB = performance.now();
                     if (nowB - (p.lastBearHit || 0) < 250) return; p.lastBearHit = nowB;
-                    const base = DAMAGE[p.state.item] * (p.state.item === 'bow' && m.ir === 1 ? 2 : 1); // железная стрела бьёт вдвое сильнее
-                    if (!base || Math.hypot(p.state.x - b.x, p.state.z - b.z) > meleeRange(p.state.item) + 4.5) return;
+                    let base = DAMAGE[p.state.item];
+                    if (!base) return;
+                    if (p.state.item === 'bow') { const cr = takeArrowCredit(p, b.x, getTerrainHeight(b.x, b.z) + 1.3, b.z, nowB, 2.8); if (!cr) return; if (cr.ir) base *= 2; }
+                    else if (Math.hypot(p.state.x - b.x, p.state.z - b.z) > meleeRange(p.state.item) + 4.5) return;
                     b.hp -= base * (m.head ? HEAD_MULT : 1);
                     if (b.hp <= 0) { hostAll({ t: 'bearkill', id: b.id }); bearSpawnAt.push(Date.now() + BEAR_RESPAWN_S * 1000); }
                     else { hostAll({ t: 'bearhurt', id: b.id, hp: b.hp }); if (!b.aggro) { b.aggro = true; b.target = fromId; b.goal = null; b.stuckT = 0; b.chaseBest = Infinity; } } // ударили — сразу разозлился на того, кто бьёт
@@ -5298,6 +5310,27 @@
             if (t - lastHostPingAt > 2000) { lastHostPingAt = t; hostBroadcast({ t: 'ping' }); }
         }
         var lastHostInnerAt = 0, lastMonAt = 0, urgentTimer = null;
+        // --- защита хозяина от подделки сообщений ---
+        function refundOk(p, n) { // «возврат» предметов при отказе выдаём не быстрее, чем их мог положить живой игрок (иначе можно размножать вещи)
+            const now = performance.now();
+            p.refB = Math.min(60, (p.refB === undefined ? 60 : p.refB) + (now - (p.refAt || now)) / 1000);
+            p.refAt = now;
+            if (p.refB < n) return false; p.refB -= n; return true;
+        }
+        function takeArrowCredit(p, tx, ty, tz, now, tol) { // попадание из лука засчитываем, только если игрок правда выпустил стрелу и её траектория проходит через цель
+            const list = p.arrowCr; if (!list || !list.length) return null;
+            tol = tol || 2.2;
+            for (let i = 0; i < list.length; i++) {
+                const c = list[i]; if (now - c.t > 12000) continue;
+                const tMax = Math.min(10, (now - c.t) / 1000 + 1.0); // дальше, чем успела бы пролететь за прошедшее время, стрела быть не могла
+                for (let t = 0.03; t <= tMax; t += 0.03) {
+                    const x = c.x + c.vx * t, y = c.y + c.vy * t - 5 * t * t, z = c.z + c.vz * t; // та же гравитация (10), что у стрелы в полёте
+                    if (Math.hypot(x - tx, y - ty, z - tz) < tol) { list.splice(i, 1); return c; }
+                }
+            }
+            p.arrowCr = list.filter(c => now - c.t <= 12000);
+            return null;
+        }
         const codeFails = new Map(); // «игрок|дверь» -> неверные попытки кода (защита от перебора)
         function hostSaveSoon() { if (role !== 'host' || urgentTimer) return; urgentTimer = setTimeout(() => { urgentTimer = null; try { saveWorldNow(peer, true); } catch (_) {} }, 3000); } // построили/сломали — сохраняем через 3 секунды
         function hostTickInner() {
@@ -5320,7 +5353,7 @@
             if (now - lastHostPingAt > 2000) { lastHostPingAt = now; hostBroadcast({ t: 'ping' }); }
         }
         // Всё, что нужно новичку (и для сохранения мира): что срублено, какие постройки, сумки…
-        function worldPayload() {
+        function worldPayload(strip) { // strip: для чужих игроков — без кодов от дверей
             return {
                 cycle: cycleTime,
                 hits: currentHits(), destroyed: currentDestroyed(),
@@ -5328,7 +5361,7 @@
                 foundations: [...foundations.values()].map(f => ({ id: f.id, x: f.x, y: f.y, z: f.z, material: f.material, createdAt: f.createdAt, hp: f.hp })),
                 walls: [...walls.values()].map(w => ({ id: w.id, x: w.x, y: w.y, z: w.z, rot: w.rot, variant: w.variant, material: w.material, createdAt: w.createdAt, hp: w.hp })),
                 roofs: [...roofs.values()].map(r => ({ id: r.id, x: r.x, y: r.y, z: r.z, material: r.material, createdAt: r.createdAt, hp: r.hp })),
-                doors: [...doors.values()].map(d => ({ id: d.id, x: d.x, y: d.y, z: d.z, rot: d.rot, open: d.open, locked: d.locked, owner: d.owner, ck: d.ck ? 1 : 0, cs: d.cs ? 1 : 0, ccode: d.ccode || undefined, cauth: d.cauth ? [...d.cauth] : undefined, createdAt: d.createdAt, hp: d.hp })),
+                doors: [...doors.values()].map(d => ({ id: d.id, x: d.x, y: d.y, z: d.z, rot: d.rot, open: d.open, locked: d.locked, owner: d.owner, ck: d.ck ? 1 : 0, cs: d.cs ? 1 : 0, ccode: strip ? undefined : (d.ccode || undefined), cauth: strip ? undefined : (d.cauth ? [...d.cauth] : undefined), createdAt: d.createdAt, hp: d.hp })),
                 cupboards: [...cupboards.values()].map(t => ({ id: t.id, x: t.x, y: t.y, z: t.z, rot: t.rot, wood: t.wood, stone: t.stone, registered: t.registered, createdAt: t.createdAt })),
                 furnaces: [...furnaces.values()].map(f => ({ id: f.id, x: f.x, y: f.y, z: f.z, rot: f.rot, wood: f.wood, cells: f.cells, on: f.on, burn: f.burn, createdAt: f.createdAt })),
                 stairs: [...stairs.values()].map(st => ({ id: st.id, x: st.x, y: st.y, z: st.z, rot: st.rot, material: st.material, createdAt: st.createdAt, hp: st.hp })),
@@ -5383,7 +5416,7 @@
                     conn.send({
                         t: 'welcome', id: pid,
                         players: [...hostPlayers].filter(([id2, q]) => id2 !== pid && q.state && !q.dead).map(([id2, q]) => ({ id: id2, ...q.state })),
-                        ...worldPayload()
+                        ...worldPayload(true)
                     });
                 });
                 conn.on('data', (m) => { try { hostHandle(pid, m); } catch (e) { console.error('hostHandle', e); } });
