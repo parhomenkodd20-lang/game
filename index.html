@@ -5192,7 +5192,7 @@
                 }
                 case 'upgrade': { hostSaveSoon(); // улучшить в камень отдельную часть: фундамент, стену или крышу
                     const rec = typeof m.id === 'string' ? (pieceMaps()[m.kind] || new Map()).get(m.id) : null;
-                    if (rec && m.kind !== 'door' && m.kind !== 'cupboard' && m.kind !== 'furnace' && m.kind !== 'sleepbag' && rec.material !== 'stone' && !tcBlocked(rec.x, rec.z, fromId)) hostAll({ t: 'pieceupg', kind: m.kind, id: rec.id, by: fromId });
+                    if (rec && m.kind !== 'door' && m.kind !== 'cupboard' && m.kind !== 'furnace' && m.kind !== 'sleepbag' && rec.material !== 'stone' && !tcBlocked(rec.x, rec.z, fromId)) { hostAll({ t: 'pieceupg', kind: m.kind, id: rec.id, by: fromId }); try { peer.sendRaw({ k: 'charge', pid: fromId, type: 'stone_material', n: 5 }); } catch (_) {} }
                     break;
                 }
                 case 'demolish': { hostSaveSoon(); // разрушить — только если эта часть не старше 3 минут (проверяет хозяин)
@@ -5202,12 +5202,12 @@
                 }
                 case 'lock': { hostSaveSoon(); // поставить замок на дверь — владельцем станет тот, кто поставил
                     const d = typeof m.id === 'string' ? doors.get(m.id) : null;
-                    if (d && !d.locked && !tcBlocked(d.x, d.z, fromId) && !(p.state && Math.hypot(p.state.x - d.x, p.state.z - d.z) > 14)) hostAll({ t: 'doorlock', id: d.id, owner: fromId });
+                    if (d && !d.locked && !tcBlocked(d.x, d.z, fromId) && !(p.state && Math.hypot(p.state.x - d.x, p.state.z - d.z) > 14)) { hostAll({ t: 'doorlock', id: d.id, owner: fromId }); try { peer.sendRaw({ k: 'charge', pid: fromId, type: 'lock', n: 1 }); } catch (_) {} }
                     break;
                 }
                 case 'clock': { // поставить кодовый замок
                     const d = typeof m.id === 'string' ? doors.get(m.id) : null;
-                    if (d && !d.locked && !d.ck && !tcBlocked(d.x, d.z, fromId) && !(p.state && Math.hypot(p.state.x - d.x, p.state.z - d.z) > 14)) hostAll({ t: 'doorck', id: d.id, owner: fromId });
+                    if (d && !d.locked && !d.ck && !tcBlocked(d.x, d.z, fromId) && !(p.state && Math.hypot(p.state.x - d.x, p.state.z - d.z) > 14)) { hostAll({ t: 'doorck', id: d.id, owner: fromId }); try { peer.sendRaw({ k: 'charge', pid: fromId, type: 'codelock', n: 1 }); } catch (_) {} }
                     break;
                 }
                 case 'cset': { // хозяин задаёт код (старые допущенные игроки теряют доступ)

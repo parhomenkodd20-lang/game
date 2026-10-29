@@ -206,6 +206,29 @@ function ledGate(w, c, msg) {
         ledTake(e, msg.type, amt, now);
         return true;
     }
+    if (t === 'build') { // стройка: материалы или предмет списываем сразу (игра у себя тоже списывает при установке)
+        let cost = null;
+        switch (msg.kind) {
+            case 'foundation': cost = ['wood', 5]; break;
+            case 'wall': cost = ['wood', msg.variant === 'door' ? 5 : 4]; break;
+            case 'roof': cost = ['wood', 6]; break;
+            case 'stair': cost = ['wood', 10]; break;
+            case 'cupboard': cost = ['cupboard', 1]; break;
+            case 'furnace': cost = ['furnace', 1]; break;
+            case 'sleepbag': cost = ['sleepbag', 1]; break;
+            case 'doorleaf': cost = ['door', 1]; break;
+        }
+        if (!cost) return false;
+        const e = ledEntry(w, c.id);
+        if (ledAvail(e, cost[0], now) + ledTol(e, cost[0], now) < cost[1]) return false; // нечем платить — хозяину не передаём
+        ledTake(e, cost[0], cost[1], now);
+        return true;
+    }
+    if (t === 'lock' || t === 'clock' || t === 'upgrade') { // замок и улучшение: хозяин сам скажет, когда это состоялось (k:'charge'), здесь только проверяем, что есть чем платить
+        const cost = t === 'lock' ? ['lock', 1] : t === 'clock' ? ['codelock', 1] : ['stone_material', 5];
+        const e = ledEntry(w, c.id);
+        return ledAvail(e, cost[0], now) + ledTol(e, cost[0], now) >= cost[1];
+    }
     if (t === 'bag') { // сумка после смерти: только то, что есть по счёту
         if (!Array.isArray(msg.items)) return false;
         const e = ledEntry(w, c.id), out = [];
@@ -404,7 +427,9 @@ function handleMessage(c, m) {
         case 's': { // позиция игрока: храним у себя и сами рассылаем соседям
             if (!c.isHost && !c.attached) return;
             if (!isNum(m.x, 2000) || !isNum(m.y, 500) || !isNum(m.z, 2000) || !isNum(m.yaw, 10) || !isNum(m.pitch, 10)) return;
-            c.state = { x: m.x, y: m.y, z: m.z, yaw: m.yaw, pitch: m.pitch, item: HELD_ITEMS.includes(m.item) ? m.item : null, air: !!m.air, tp: Number.isInteger(m.tp) ? m.tp : 0 };
+            let held = HELD_ITEMS.includes(m.item) ? m.item : null;
+            if (held && !KIT[held] && !exemptC(c) && ledAvail(ledEntry(w, c.id), held, Date.now()) < 1) held = null; // «держу топор», которого нет по счёту, — не засчитываем
+            c.state = { x: m.x, y: m.y, z: m.z, yaw: m.yaw, pitch: m.pitch, item: held, air: !!m.air, tp: Number.isInteger(m.tp) ? m.tp : 0 };
             c.nick = c.accName || (typeof m.nick === 'string' ? cleanNick(m.nick) : ''); // ник = имя аккаунта, подделать нельзя
             c.ver++; c.fwdPending = true;
             return;
@@ -434,6 +459,14 @@ function handleMessage(c, m) {
                 c.send({ k: 'invfix', inv: fixc });
                 console.warn('[' + w.id + '] ' + (c.accName || c.id) + ': крафт без материалов отклонён: ' + m.id);
             }
+            return;
+        }
+        case 'charge': { // хозяин подтвердил, что замок или улучшение состоялись, — списываем плату
+            if (!c.isHost || typeof m.pid !== 'string') return;
+            const o = w.players.get(m.pid);
+            const okT = { lock: 1, codelock: 1, stone_material: 5 };
+            if (!o || exemptC(o) || typeof m.type !== 'string' || !Object.prototype.hasOwnProperty.call(okT, m.type) || m.n !== okT[m.type]) return;
+            ledTake(ledEntry(w, o.id), m.type, m.n, Date.now());
             return;
         }
         case 'grant': { // хозяин подтвердил добычу игрока
