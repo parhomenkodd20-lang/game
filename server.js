@@ -76,7 +76,7 @@ const store = {
 // Миры
 // ---------------------------------------------------------------------
 const worlds = new Map(); // id -> { id, name, host, players: Map(id -> Conn), saved, saveTimer, dirty }
-WORLD_NAMES.forEach((name, i) => worlds.set('w' + (i + 1), { id: 'w' + (i + 1), name, host: null, players: new Map(), saved: null, saveTimer: null, dirty: false, pdata: {}, pTimer: null, pDirty: false }));
+WORLD_NAMES.forEach((name, i) => worlds.set('w' + (i + 1), { id: 'w' + (i + 1), name, host: null, players: new Map(), saved: null, saveTimer: null, dirty: false, pdata: {}, pTimer: null, pDirty: false, led: new Map() }));
 
 function schedulePersist(w, urgent) {
     w.dirty = true;
@@ -121,6 +121,103 @@ function cleanPlayerRec(m, nick) {
     const inv = m.inv.map(it => (it && typeof it.type === 'string' && ITEM_TYPE.test(it.type) && Number.isInteger(it.count) && it.count >= 1 && it.count <= 30) ? { type: it.type, count: it.count } : null);
     if (!isNum(m.x, 2000) || !isNum(m.y, 500) || !isNum(m.z, 2000) || !isNum(m.yaw, 10) || !isNum(m.pitch, 10)) return null;
     return { inv, sel: Number.isInteger(m.sel) && m.sel >= 0 && m.sel < 40 ? m.sel : 0, dead: !!m.dead, x: m.x, y: m.y, z: m.z, yaw: m.yaw, pitch: m.pitch, nick: nick || '', at: Date.now() };
+}
+
+
+// ---------------------------------------------------------------------
+// Учёт предметов. Инвентарь по-прежнему лежит у игрока, но сервер ведёт свой счёт «сколько чего у него может быть»
+// и принимает только честные поступления: добыча (её подтверждает хозяин мира), крафт (по рецепту, с проверкой материалов),
+// возврат из шкафа, печи и сумки (тоже от хозяина). Всё, что игрок «нарисовал» себе сам, срезается, а отдать в шкаф, печь
+// или сумку можно только то, что по счёту у него есть. Хозяин мира и админ не проверяются: у них счёт просто повторяет их инвентарь.
+// ---------------------------------------------------------------------
+const KIT = { stone: 1, torch: 1 };                                    // стартовый набор: выдаётся при каждом возрождении
+const HARVEST_TYPES = new Set(['wood', 'stone_material', 'iron_material', 'sulfur_material']);
+const SHADOW_MS = 2000, HIT_WINDOW_MS = 4000;
+const SRV_RECIPES = {
+    pickaxe: [{ wood: 10, stone_material: 5 }, 'pickaxe', 1], axe: [{ wood: 10, stone_material: 5 }, 'axe', 1],
+    spear: [{ wood: 10, stone_material: 10 }, 'spear', 1], mallet: [{ wood: 20 }, 'mallet', 1],
+    chertyozh: [{ wood: 10 }, 'chertyozh', 1], lock: [{ wood: 5 }, 'lock', 1],
+    bow: [{ cloth: 30, wood: 20 }, 'bow', 1], arrow: [{ stone_material: 5, wood: 5 }, 'arrow', 4],
+    iron_arrow: [{ metal_material: 5, wood: 5 }, 'iron_arrow', 4], codelock: [{ metal_material: 5 }, 'codelock', 1],
+    door: [{ wood: 10 }, 'door', 1], cupboard: [{ wood: 30 }, 'cupboard', 1],
+    furnace: [{ stone_material: 30, wood: 10 }, 'furnace', 1], sleepbag: [{ cloth: 20 }, 'sleepbag', 1]
+};
+const exemptC = (c) => !!(c && (c.isHost || c.admin));
+function ledEntry(w, id) {
+    let e = w.led.get(id);
+    if (!e) {
+        e = { led: {}, shadow: {}, hits: [] };
+        const rec = w.pdata[id];
+        if (rec && Array.isArray(rec.inv)) for (const it of rec.inv) if (it) e.led[it.type] = (e.led[it.type] || 0) + it.count;
+        w.led.set(id, e);
+    }
+    return e;
+}
+function ledAvail(e, t, now) { const s = e.shadow[t]; return (e.led[t] || 0) + (s && now - s.at <= SHADOW_MS ? s.n : 0); }
+function ledTake(e, t, n, now) { // списать до n штук; возвращает, сколько списали
+    const g = Math.min(n, ledAvail(e, t, now));
+    if (g <= 0) return 0;
+    let rest = g;
+    const s = e.shadow[t];
+    if (s && now - s.at <= SHADOW_MS) { const f = Math.min(s.n, rest); s.n -= f; rest -= f; }
+    if (rest) e.led[t] = Math.max(0, (e.led[t] || 0) - rest);
+    return g;
+}
+function ledGain(e, t, n) { e.led[t] = (e.led[t] || 0) + n; }
+function ledTol(e, t, now) { // удары по ресурсам, подтверждение которых от хозяина ещё в пути
+    if (!HARVEST_TYPES.has(t)) return 0;
+    e.hits = e.hits.filter(x => now - x < HIT_WINDOW_MS);
+    return 2 * e.hits.length;
+}
+// Игрок прислал инвентарь: траты принимаем всегда, лишнее срезаем. Возвращает { тип: сколько осталось }, если что-то срезали.
+function ledReport(w, c, rec, now) {
+    const e = ledEntry(w, c.id);
+    const rep = {};
+    for (const it of rec.inv) if (it) rep[it.type] = (rep[it.type] || 0) + it.count;
+    if (exemptC(c)) { e.led = Object.assign({}, rep); e.shadow = {}; return null; }
+    let fix = null;
+    for (const t of new Set([...Object.keys(rep), ...Object.keys(e.led)])) {
+        const r = rep[t] || 0, l = e.led[t] || 0;
+        if (r < l) { // потратил или отдал: счёт снижаем, разницу на пару секунд помним
+            const s = e.shadow[t];
+            if (s && now - s.at <= SHADOW_MS) { s.n += l - r; s.at = now; } else e.shadow[t] = { n: l - r, at: now };
+            e.led[t] = r;
+        } else {
+            const lim = Math.max(l, KIT[t] || 0) + ledTol(e, t, now);
+            if (r > lim) {
+                let ex = r - lim;
+                for (let i = rec.inv.length - 1; i >= 0 && ex > 0; i--) { const sl = rec.inv[i]; if (sl && sl.type === t) { const d = Math.min(ex, sl.count); sl.count -= d; ex -= d; if (sl.count <= 0) rec.inv[i] = null; } }
+                (fix = fix || {})[t] = lim;
+                console.warn('[' + w.id + '] ' + (c.accName || c.id) + ': лишние предметы срезаны: ' + t + ' ' + r + ' -> ' + lim);
+            }
+        }
+    }
+    return fix;
+}
+// Сообщения игрока хозяину: что можно передать, а что нет
+function ledGate(w, c, msg) {
+    const t = msg && msg.t, now = Date.now();
+    if (t === 'hit') { const e = ledEntry(w, c.id); e.hits.push(now); if (e.hits.length > 16) e.hits.shift(); return true; }
+    if (t === 'fput' || t === 'tcput') { // положить в печь или шкаф: только то, что есть по счёту
+        const amt = msg.amount;
+        if (typeof msg.type !== 'string' || !ITEM_TYPE.test(msg.type) || !Number.isInteger(amt) || amt < 1 || amt > 20) return false;
+        const e = ledEntry(w, c.id);
+        if (ledAvail(e, msg.type, now) < amt) return false;
+        ledTake(e, msg.type, amt, now);
+        return true;
+    }
+    if (t === 'bag') { // сумка после смерти: только то, что есть по счёту
+        if (!Array.isArray(msg.items)) return false;
+        const e = ledEntry(w, c.id), out = [];
+        for (const it of msg.items.slice(0, 25)) {
+            if (!it || typeof it.type !== 'string' || !ITEM_TYPE.test(it.type) || !Number.isInteger(it.count) || it.count < 1 || it.count > 30) continue;
+            const got = ledTake(e, it.type, it.count, now);
+            if (got > 0) out.push({ type: it.type, count: got });
+        }
+        msg.items = out;
+        return out.length > 0;
+    }
+    return true;
 }
 
 // ---------------------------------------------------------------------
@@ -287,8 +384,15 @@ function handleMessage(c, m) {
         case 'd': { // данные: игрок -> хозяину, хозяин -> игроку
             if (c.isHost) {
                 const o = w.players.get(m.to);
-                if (o && o.attached && m.m) o.send({ k: 'd', m: m.m });
-            } else if (c.attached && m.m) sendHost(w, { k: 'd', from: c.id, m: m.m });
+                if (o && o.attached && m.m) {
+                    const g = m.m;
+                    if (g.t === 'given' && !exemptC(o) && typeof g.type === 'string' && ITEM_TYPE.test(g.type) && Number.isInteger(g.count) && g.count >= 1 && g.count <= 30) ledGain(ledEntry(w, o.id), g.type, g.count); // хозяин вернул или выдал предмет — записываем
+                    o.send({ k: 'd', m: m.m });
+                }
+            } else if (c.attached && m.m) {
+                if (!exemptC(c) && !ledGate(w, c, m.m)) return; // нечестное сообщение хозяину не передаём
+                sendHost(w, { k: 'd', from: c.id, m: m.m });
+            }
             return;
         }
         case 'bc': { // хозяин: всем игрокам сразу (кроме одного)
@@ -311,7 +415,32 @@ function handleMessage(c, m) {
             if (!rec) return;
             c.pSynced = true;
             if (!w.pdata[c.id] && Object.keys(w.pdata).length >= MAX_PLAYER_RECORDS) return;
+            const fixInv = ledReport(w, c, rec, Date.now());
+            if (fixInv) c.send({ k: 'invfix', inv: fixInv });
             w.pdata[c.id] = rec; schedulePersistPlayers(w, m.u === 1);
+            return;
+        }
+        case 'craft': { // игрок сделал предмет: проверяем материалы по рецепту и записываем результат
+            if (!c.isHost && !c.attached) return;
+            if (exemptC(c)) return;
+            const rc = typeof m.id === 'string' && Object.prototype.hasOwnProperty.call(SRV_RECIPES, m.id) ? SRV_RECIPES[m.id] : null;
+            if (!rc) return;
+            const e = ledEntry(w, c.id), now = Date.now();
+            if (Object.entries(rc[0]).every(([t, n]) => ledAvail(e, t, now) >= n)) {
+                for (const [t, n] of Object.entries(rc[0])) ledTake(e, t, n, now);
+                ledGain(e, rc[1], rc[2]);
+            } else {
+                const fixc = {}; fixc[rc[1]] = Math.max(e.led[rc[1]] || 0, KIT[rc[1]] || 0); // материалов не хватило — результат срезаем
+                c.send({ k: 'invfix', inv: fixc });
+                console.warn('[' + w.id + '] ' + (c.accName || c.id) + ': крафт без материалов отклонён: ' + m.id);
+            }
+            return;
+        }
+        case 'grant': { // хозяин подтвердил добычу игрока
+            if (!c.isHost || typeof m.pid !== 'string') return;
+            const o = w.players.get(m.pid);
+            if (!o || exemptC(o) || typeof m.type !== 'string' || !HARVEST_TYPES.has(m.type) || !Number.isInteger(m.n) || m.n < 1 || m.n > 2) return;
+            ledGain(ledEntry(w, o.id), m.type, m.n);
             return;
         }
         case 'save': { // хозяин присылает сохранение мира
@@ -518,7 +647,7 @@ async function loadAll() {
         await loadAccounts(); await seedAdmin();
         for (const w of worlds.values()) {
             w.saved = await store.load(w.id);
-            w.pdata = {};
+            w.pdata = {}; w.led = new Map();
             const pl = await store.load(w.id + '_p');
             if (pl && pl.players && typeof pl.players === 'object') {
                 const now = Date.now();

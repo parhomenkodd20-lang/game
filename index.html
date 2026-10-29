@@ -736,6 +736,22 @@
                 costSpend(type, amount);
             }
             addToInventory(recipe.result.type, recipe.result.count);
+            try { if (peer && peer.isWS) peer.sendRaw({ k: 'craft', id: recipeId }); } catch (_) {} // сервер ведёт свой счёт предметов и проверяет материалы
+        }
+        // Сервер срезал лишнее (нечестный предмет): приводим свой инвентарь к его счёту. inv: { тип: сколько можно }
+        function applyInvFix(allowed) {
+            if (!allowed || typeof allowed !== 'object') return;
+            let changed = false;
+            for (const t of Object.keys(allowed)) {
+                let have = 0;
+                gameState.inventory.forEach(s => { if (s && s.type === t) have += s.count; });
+                let ex = have - (Number(allowed[t]) || 0);
+                for (let i = gameState.inventory.length - 1; i >= 0 && ex > 0; i--) {
+                    const s = gameState.inventory[i];
+                    if (s && s.type === t) { const d = Math.min(ex, s.count); s.count -= d; ex -= d; if (s.count <= 0) gameState.inventory[i] = null; changed = true; }
+                }
+            }
+            if (changed) updateUI();
         }
 
         // --- UI ---
@@ -4250,6 +4266,7 @@
                 switch (m.k) {
                     case 'open': clearTimeout(this._ct); WSPeer.diag = ''; this.opened = true; this.id = m.id; this.savedWorld = m.world || null; this.pdata = m.pdata || null; isAdmin = !!m.admin; this._emit('open', m.id); break;
                     case 'err': this._emit('error', { type: m.type }); break;
+                    case 'invfix': try { applyInvFix(m.inv); } catch (_) {} break;
                     case 'copen': if (this.hostConn) { this.hostConn.open = true; this.hostConn._emit('open'); } break;
                     case 'conn': { const c = new WSConn(this, m.pid, true); this.conns.set(m.pid, c); this._emit('connection', c); c.open = true; c._emit('open'); break; }
                     case 'd': if (m.from) { const c = this.conns.get(m.from); if (c) c._emit('data', m.m); } else if (this.hostConn) this.hostConn._emit('data', m.m); break;
@@ -5033,7 +5050,18 @@
                 case 'hit':
                     if (typeof m.id !== 'string' || !RESOURCE_ID.test(m.id) || !Number.isInteger(m.hits) || m.hits < 1 || m.hits > RESOURCE_HP) return;
                     { const rr = resources.get(m.id); if (!rr || rr.gone) return; if (p.state && Math.hypot(p.state.x - rr.obj.position.x, p.state.z - rr.obj.position.z) > 16) return; if (m.hits > (rr.obj.userData.hitCount || 0) + 2) return; } // бьют только то, что рядом, и не быстрее настоящего удара
-                    if (fromId !== myId) applyRemoteHit(m.id, m.hits, true);
+                    if (fromId !== myId) { // добыча: подтверждаем серверу, сколько игрок честно получил (инструмент и ресурс совпадают, не чаще настоящего удара)
+                        const rr2 = resources.get(m.id), ud = rr2 && rr2.obj.userData, held = p.state && p.state.item, nowG = performance.now();
+                        let rt = null, dmg = 1;
+                        if (ud && ud.isTree) { if (held === 'axe') { rt = 'wood'; dmg = 2; } else if (held === 'stone') rt = 'wood'; }
+                        else if (ud && ud.isStoneResource) { const mt = ud.resourceType === 'iron' ? 'iron_material' : ud.resourceType === 'sulfur' ? 'sulfur_material' : 'stone_material'; if (held === 'pickaxe') { rt = mt; dmg = 2; } else if (held === 'stone') rt = mt; }
+                        if (rt && nowG - (p.lastGrant || 0) >= 200) {
+                            p.lastGrant = nowG;
+                            const n = Math.max(1, Math.min(dmg, RESOURCE_HP - (ud.hitCount || 0)));
+                            try { peer.sendRaw({ k: 'grant', pid: fromId, type: rt, n }); } catch (_) {}
+                        }
+                        applyRemoteHit(m.id, m.hits, true);
+                    }
                     hostBroadcast({ t: 'hit', id: m.id, hits: m.hits }, fromId);
                     break;
                 case 'atk': { // удар по игроку: проверяем и передаём урон жертве
