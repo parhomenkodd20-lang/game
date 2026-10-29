@@ -5126,7 +5126,7 @@
                     hostBroadcast({ t: 'died', id: fromId, x: m.x, y: m.y, z: m.z }, fromId);
                     break;
                 }
-                case 'bag': { // игрок погиб — на его месте появляется сумка
+                case 'bag': { hostSaveSoon(); // игрок погиб — на его месте появляется сумка
                     if (!isNum(m.x, 2000) || !isNum(m.z, 2000) || !Array.isArray(m.items) || !p.state) return;
                     if (Math.hypot(m.x - p.state.x, m.z - p.state.z) > 15) return; // сумка падает там, где игрок
                     const now = performance.now();
@@ -5138,7 +5138,7 @@
                     else p.pendingBag = { msg: bagMsg, t: now }; // ждём сообщения о смерти — без него сумка не появится
                     break;
                 }
-                case 'take': { // игрок забирает предмет из сумки
+                case 'take': { hostSaveSoon(); // игрок забирает предмет из сумки
                     const b = bags.get(m.id);
                     if (!b || !Number.isInteger(m.slot) || m.slot < 0 || m.slot >= b.items.length) return;
                     const it = b.items[m.slot];
@@ -5190,17 +5190,17 @@
                     }
                     break;
                 }
-                case 'upgrade': { // улучшить в камень отдельную часть: фундамент, стену или крышу
+                case 'upgrade': { hostSaveSoon(); // улучшить в камень отдельную часть: фундамент, стену или крышу
                     const rec = typeof m.id === 'string' ? (pieceMaps()[m.kind] || new Map()).get(m.id) : null;
                     if (rec && m.kind !== 'door' && m.kind !== 'cupboard' && m.kind !== 'furnace' && m.kind !== 'sleepbag' && rec.material !== 'stone' && !tcBlocked(rec.x, rec.z, fromId)) hostAll({ t: 'pieceupg', kind: m.kind, id: rec.id, by: fromId });
                     break;
                 }
-                case 'demolish': { // разрушить — только если эта часть не старше 3 минут (проверяет хозяин)
+                case 'demolish': { hostSaveSoon(); // разрушить — только если эта часть не старше 3 минут (проверяет хозяин)
                     const rec = typeof m.id === 'string' ? (pieceMaps()[m.kind] || new Map()).get(m.id) : null;
                     if (rec && Date.now() - rec.createdAt <= DEMOLISH_WINDOW_MS && !tcBlocked(rec.x, rec.z, fromId)) { if (m.kind === 'furnace') furnaceSpill(rec); hostAll({ t: 'piecedel', kind: m.kind, id: rec.id }); }
                     break;
                 }
-                case 'lock': { // поставить замок на дверь — владельцем станет тот, кто поставил
+                case 'lock': { hostSaveSoon(); // поставить замок на дверь — владельцем станет тот, кто поставил
                     const d = typeof m.id === 'string' ? doors.get(m.id) : null;
                     if (d && !d.locked && !tcBlocked(d.x, d.z, fromId) && !(p.state && Math.hypot(p.state.x - d.x, p.state.z - d.z) > 14)) hostAll({ t: 'doorlock', id: d.id, owner: fromId });
                     break;
@@ -5244,7 +5244,7 @@
                     if (t && !t.registered.includes(fromId) && !(p.state && Math.hypot(p.state.x - t.x, p.state.z - t.z) > 16)) hostAll({ t: 'tcreg', id: t.id, pid: fromId });
                     break;
                 }
-                case 'tcput': { // положить дерево/камень в шкаф (предмет уже убран у игрока; при отказе возвращаем)
+                case 'tcput': { hostSaveSoon(); // положить дерево/камень в шкаф (предмет уже убран у игрока; при отказе возвращаем)
                     const t = typeof m.id === 'string' ? cupboards.get(m.id) : null;
                     const amt = Number.isInteger(m.amount) ? m.amount : 0;
                     if ((m.type !== 'wood' && m.type !== 'stone_material') || amt < 1 || amt > 20) break;
@@ -5258,7 +5258,7 @@
                     hostAll({ t: 'tcstock', id: t.id, wood: t.wood, stone: t.stone });
                     break;
                 }
-                case 'tcget': { // забрать стопку из шкафа
+                case 'tcget': { hostSaveSoon(); // забрать стопку из шкафа
                     const t = typeof m.id === 'string' ? cupboards.get(m.id) : null;
                     const amt = Number.isInteger(m.amount) ? m.amount : 0;
                     if (!t || !t.registered.includes(fromId) || amt < 1 || amt > 20 || (m.type !== 'wood' && m.type !== 'stone_material')) break;
@@ -5271,7 +5271,7 @@
                     hostAll({ t: 'tcstock', id: t.id, wood: t.wood, stone: t.stone });
                     break;
                 }
-                case 'fput': { // положить в печь дерево или руду (предмет уже убран у игрока; лишнее возвращаем)
+                case 'fput': { hostSaveSoon(); // положить в печь дерево или руду (предмет уже убран у игрока; лишнее возвращаем)
                     const f = typeof m.id === 'string' ? furnaces.get(m.id) : null;
                     const amt = Number.isInteger(m.amount) ? m.amount : 0;
                     if (amt < 1 || amt > 20 || !hasItemType(m.type)) break;
@@ -5283,7 +5283,7 @@
                     if (left < amt) hostAll(furnaceStateMsg(f));
                     break;
                 }
-                case 'ftake': { // забрать из печи стопку (дерево или ячейку)
+                case 'ftake': { hostSaveSoon(); // забрать из печи стопку (дерево или ячейку)
                     const f = typeof m.id === 'string' ? furnaces.get(m.id) : null;
                     if (!f || tcBlocked(f.x, f.z, fromId) || (p.state && Math.hypot(p.state.x - f.x, p.state.z - f.z) > 16)) break;
                     const to = Number.isInteger(m.to) && m.to >= 0 && m.to < 25 ? m.to : undefined;
@@ -5293,7 +5293,7 @@
                     hostAll(furnaceStateMsg(f));
                     break;
                 }
-                case 'ftoggle': { // включить / выключить печь
+                case 'ftoggle': { hostSaveSoon(); // включить / выключить печь
                     const f = typeof m.id === 'string' ? furnaces.get(m.id) : null;
                     if (!f || tcBlocked(f.x, f.z, fromId) || (p.state && Math.hypot(p.state.x - f.x, p.state.z - f.z) > 16)) break;
                     if (f.on) { f.on = false; f.why = ''; }
