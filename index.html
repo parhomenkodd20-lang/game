@@ -4204,14 +4204,39 @@
         const RESOURCE_ID = /^(tree|rock)_[rc]?\d{1,6}$/; // обычные (tree_5), возродившиеся (rock_r7) и кратерные (rock_c0)
         // ===== Свой игровой сервер (WebSocket). Впиши адрес сюда после запуска на Render, например 'my-game.onrender.com'.
         // Можно и без правки файла: game.html?server=my-game.onrender.com  Пусто = старый режим через PeerJS.
+        // Можно перечислить несколько адресов через запятую: если первый не открывается (например, провайдер режет onrender.com),
+        // игра сама пробует следующий. Последний рабочий запоминается.
         const GAME_SERVER_RAW = 'game-1-nsep.onrender.com';
         // Страница открыта по адресу-числу (http://12.34.56.78/) — значит, её раздаёт сам игровой сервер (свой сервер, не Render): подключаемся к нему же
         const PAGE_IS_IP = (/^\d{1,3}(\.\d{1,3}){3}$/.test(location.hostname) || /\.hf\.space$/.test(location.hostname)) && /^https?:$/.test(location.protocol); // свой сервер по IP или на Hugging Face
-        const GAME_SERVER = (new URLSearchParams(location.search).get('server') || (PAGE_IS_IP ? location.host : GAME_SERVER_RAW)).trim().replace(/^https?:\/\//, '').replace(/\/+$/, '')
-            || (/\.onrender\.com$/.test(location.hostname) ? location.host : '');
+        const normHost = (s) => String(s || '').trim().replace(/^https?:\/\//, '').replace(/\/+$/, '');
+        const GAME_SERVER_LIST = (() => {
+            const qp = normHost(new URLSearchParams(location.search).get('server'));
+            let l = qp ? [qp] : PAGE_IS_IP ? [location.host] : GAME_SERVER_RAW.split(',').map(normHost).filter(Boolean);
+            if (!l.length && /\.onrender\.com$/.test(location.hostname)) l = [location.host];
+            return l;
+        })();
+        const GAME_SERVER_KEY = GAME_SERVER_LIST[0] || ''; // ключ для сохранений в браузере не зависит от того, какой адрес сейчас рабочий
+        let serverIdx = 0;
+        try { const ok = localStorage.getItem('nw_srv_ok'); const k = GAME_SERVER_LIST.indexOf(ok); if (k >= 0) serverIdx = k; } catch (e) {}
+        let GAME_SERVER = GAME_SERVER_LIST[serverIdx] || '';
         const USE_WS = !!GAME_SERVER && !OFFLINE;
-        const SERVER_HTTP = USE_WS ? ((/^(localhost|127\.|192\.168\.|10\.)/.test(GAME_SERVER) || (location.protocol === 'http:' && GAME_SERVER === location.host)) ? 'http://' : 'https://') + GAME_SERVER : '';
-        const SERVER_WS = SERVER_HTTP.replace(/^http/, 'ws') + '/';
+        let SERVER_HTTP = '', SERVER_WS = '';
+        function applyServer() {
+            GAME_SERVER = GAME_SERVER_LIST[serverIdx] || '';
+            SERVER_HTTP = USE_WS ? ((/^(localhost|127\.|192\.168\.|10\.)/.test(GAME_SERVER) || (location.protocol === 'http:' && GAME_SERVER === location.host)) ? 'http://' : 'https://') + GAME_SERVER : '';
+            SERVER_WS = SERVER_HTTP.replace(/^http/, 'ws') + '/';
+        }
+        applyServer();
+        let lastRotateAt = 0;
+        function rotateServer() { // этот адрес не отвечает — пробуем следующий (не чаще раза в 2 секунды, чтобы разные части игры не крутили адреса вперёд-назад)
+            if (GAME_SERVER_LIST.length < 2 || performance.now() - lastRotateAt < 2000) return false;
+            lastRotateAt = performance.now();
+            serverIdx = (serverIdx + 1) % GAME_SERVER_LIST.length;
+            applyServer();
+            return true;
+        }
+        function rememberServerOk() { try { localStorage.setItem('nw_srv_ok', GAME_SERVER); } catch (e) {} }
         let worldId = 'w1';
         try { worldId = localStorage.getItem('nw_world') || 'w1'; } catch (e) {}
         let PLAYER_TOKEN = (() => { // секрет игрока: по нему сервер узнаёт тебя после перезахода (твои двери и шкафы остаются твоими)
@@ -4236,12 +4261,12 @@
                 try { ws = new WebSocket(SERVER_WS); } catch (e) { setTimeout(() => this._emit('error', { type: 'network' }), 0); return; }
                 this.ws = ws;
                 // Если за 20 секунд сервер так и не ответил — не висим вечно, а считаем попытку неудачной и объясняем причину
-                this._ct = setTimeout(() => { if (!this.opened && !this.destroyed && this.ws === ws) { WSPeer.explain('нет ответа от сервера 20 секунд'); try { ws.close(); } catch (_) {} this.destroyed = true; this._emit('error', { type: 'network' }); } }, 20000);
+                this._ct = setTimeout(() => { if (!this.opened && !this.destroyed && this.ws === ws) { rotateServer(); WSPeer.explain('нет ответа от сервера 20 секунд'); try { ws.close(); } catch (_) {} this.destroyed = true; this._emit('error', { type: 'network' }); } }, 20000);
                 ws.onopen = () => ws.send(JSON.stringify({ k: 'hello', world: worldId, host: this.wantHost, tok: PLAYER_TOKEN }));
                 ws.onmessage = (e) => { if (this.ws !== ws) return; let m; try { m = JSON.parse(e.data); } catch (_) { return; } try { this._onMsg(m); } catch (err) { console.error('ws msg', err); } };
                 const failEarly = (code) => { // соединение не открылось (браузер шлёт и error, и close — реагируем один раз)
                     if (this.opened || this.destroyed || this.ws !== ws || this._failed) return;
-                    this._failed = true; clearTimeout(this._ct); this.disconnected = true;
+                    this._failed = true; clearTimeout(this._ct); this.disconnected = true; rotateServer();
                     WSPeer.explain('WebSocket не открылся' + (code ? ' (код ' + code + ')' : ''));
                     this._emit('error', { type: 'network' });
                 };
@@ -4266,7 +4291,7 @@
             destroy() { if (this.destroyed) return; this.destroyed = true; try { this.ws.close(); } catch (_) {} }
             _onMsg(m) {
                 switch (m.k) {
-                    case 'open': clearTimeout(this._ct); WSPeer.diag = ''; this.opened = true; this.id = m.id; this.savedWorld = m.world || null; this.pdata = m.pdata || null; isAdmin = !!m.admin; this._emit('open', m.id); break;
+                    case 'open': clearTimeout(this._ct); WSPeer.diag = ''; this.opened = true; rememberServerOk(); this.id = m.id; this.savedWorld = m.world || null; this.pdata = m.pdata || null; isAdmin = !!m.admin; this._emit('open', m.id); break;
                     case 'err': this._emit('error', { type: m.type }); break;
                     case 'invfix': try { applyInvFix(m.inv); } catch (_) {} break;
                     case 'copen': if (this.hostConn) { this.hostConn.open = true; this.hostConn._emit('open'); } break;
@@ -4510,7 +4535,7 @@
             }
             updateUI();
         }
-        const plBackupKey = () => 'nw_pl_' + GAME_SERVER + '_' + worldId + '_' + ((account && account.name) ? account.name.toLowerCase() : (localStorage.getItem('nw_tok') || '').slice(0, 12));
+        const plBackupKey = () => 'nw_pl_' + GAME_SERVER_KEY + '_' + worldId + '_' + ((account && account.name) ? account.name.toLowerCase() : (localStorage.getItem('nw_tok') || '').slice(0, 12));
         function tryApplySavedPlayer() { // вызывается, когда мир уже загружен (у хозяина и у остальных)
             if (!peer || !peer.isWS || !role) return;
             if (playerSyncWorld !== worldId) { // только первый вход в этот мир за сессию; при переподключении ничего не откатываем
@@ -5412,7 +5437,7 @@
 
         // Запасная копия мира в самом браузере: любой игрок раз в 10 секунд запоминает, как выглядит мир (постройки, срубленное).
         // Если бесплатный сервер перезапустился и «забыл» мир, первый вернувшийся игрок восстанавливает его из своей копии.
-        const worldCacheKey = () => 'nw_cache_' + GAME_SERVER + '_' + worldId;
+        const worldCacheKey = () => 'nw_cache_' + GAME_SERVER_KEY + '_' + worldId;
         let lastCachedJson = '', lastCacheAt = 0;
         function cacheWorldLocally() {
             if (!USE_WS || !role || soloMode) return;
@@ -5769,11 +5794,12 @@
         }
         async function fetchServers() {
             try {
-                const r = await fetch(SERVER_HTTP + '/worlds', { cache: 'no-store' });
+                const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 8000); // заблокированный адрес не отвечает вообще — не ждём вечно
+                let r; try { r = await fetch(SERVER_HTTP + '/worlds', { cache: 'no-store', signal: ctl.signal }); } finally { clearTimeout(tm); }
                 const list = await r.json();
                 if (!Array.isArray(list) || !list.length) throw new Error('empty');
-                serverList = list;
-            } catch (_) {}
+                serverList = list; rememberServerOk();
+            } catch (_) { rotateServer(); }
             if (serverPanelEl.style.display !== 'none') renderServers();
         }
         function openServerMenu() {
