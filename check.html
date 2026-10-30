@@ -14,6 +14,10 @@ button{margin-top:10px;padding:12px 18px;font:600 16px system-ui;border:0;border
 <textarea id="h" spellcheck="false">game-1-nsep.onrender.com</textarea>
 <button id="go">Проверить</button>
 <div id="out"></div>
+<h1 style="margin-top:22px">Что открывается у тебя без VPN</h1>
+<p>Обзор популярных хостингов: покажет, какие из них твой оператор пропускает. По нему можно выбрать бесплатное место для сервера, которое точно будет работать. «Не открылось» может значить и блокировку, и что у такого адреса нет главной страницы, поэтому смотри на общую картину.</p>
+<button id="survey">Запустить обзор</button>
+<div id="sout"></div>
 <p>✅ — адрес отвечает, игра будет работать. ❌ — не открылся за 12 секунд: скорее всего, провайдер его блокирует. Первый запуск бесплатного Render может занять до минуты, поэтому при ❌ нажми «Проверить» ещё раз.</p>
 <script>
 const out=document.getElementById('out'), ta=document.getElementById('h');
@@ -27,4 +31,11 @@ async function test(host){
 }
 document.getElementById('go').onclick=()=>{ out.innerHTML=''; ta.value.split(/[\s,]+/).map(s=>s.trim().replace(/^https?:\/\//,'').replace(/\/+$/,'')).filter(Boolean).forEach(test); };
 if(qp) document.getElementById('go').click();
+const SITES=[['Render (твой сервер)','game-1-nsep.onrender.com'],['Render, главная','render.com'],['Hugging Face','huggingface.co'],['Hugging Face Spaces','hf.space'],['Fly.io','fly.io'],['Koyeb','koyeb.com'],['Railway','railway.com'],['Heroku','heroku.com'],['Vercel','vercel.com'],['Netlify','netlify.com'],['Deno Deploy','deno.com'],['Glitch','glitch.com'],['Replit','replit.com'],['Google Cloud','cloud.google.com'],['Firebase','firebase.google.com'],['Cloudflare','cloudflare.com'],['GitHub Pages','github.io'],['GitHub','github.com'],['Upstash','upstash.com'],['Amvera (Россия)','amvera.ru'],['Yandex Cloud (Россия)','yandex.cloud'],['VK Cloud (Россия)','cloud.vk.com'],['Timeweb (Россия)','timeweb.cloud']];
+document.getElementById('survey').onclick=async()=>{ const so=document.getElementById('sout'); so.innerHTML='';
+  await Promise.all(SITES.map(async([name,host])=>{ const d=document.createElement('div'); d.className='r wait'; d.textContent='⏳ '+name+' ('+host+')'; so.appendChild(d);
+    const t0=performance.now(), ctl=new AbortController(), tm=setTimeout(()=>ctl.abort(),10000);
+    try{ await fetch('https://'+host+'/',{mode:'no-cors',cache:'no-store',signal:ctl.signal}); clearTimeout(tm); d.className='r ok'; d.textContent='✅ '+name+' ('+host+') — открывается, '+Math.round(performance.now()-t0)+' мс'; }
+    catch(e){ clearTimeout(tm); d.className='r bad'; d.textContent='❌ '+name+' ('+host+') — не открылось'; } }));
+};
 </script></body></html>
