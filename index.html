@@ -4205,10 +4205,12 @@
         // ===== Свой игровой сервер (WebSocket). Впиши адрес сюда после запуска на Render, например 'my-game.onrender.com'.
         // Можно и без правки файла: game.html?server=my-game.onrender.com  Пусто = старый режим через PeerJS.
         const GAME_SERVER_RAW = 'game-1-nsep.onrender.com';
-        const GAME_SERVER = (new URLSearchParams(location.search).get('server') || GAME_SERVER_RAW).trim().replace(/^https?:\/\//, '').replace(/\/+$/, '')
+        // Страница открыта по адресу-числу (http://12.34.56.78/) — значит, её раздаёт сам игровой сервер (свой сервер, не Render): подключаемся к нему же
+        const PAGE_IS_IP = /^\d{1,3}(\.\d{1,3}){3}$/.test(location.hostname) && /^https?:$/.test(location.protocol);
+        const GAME_SERVER = (new URLSearchParams(location.search).get('server') || (PAGE_IS_IP ? location.host : GAME_SERVER_RAW)).trim().replace(/^https?:\/\//, '').replace(/\/+$/, '')
             || (/\.onrender\.com$/.test(location.hostname) ? location.host : '');
         const USE_WS = !!GAME_SERVER && !OFFLINE;
-        const SERVER_HTTP = USE_WS ? (/^(localhost|127\.|192\.168\.|10\.)/.test(GAME_SERVER) ? 'http://' : 'https://') + GAME_SERVER : '';
+        const SERVER_HTTP = USE_WS ? ((/^(localhost|127\.|192\.168\.|10\.)/.test(GAME_SERVER) || (location.protocol === 'http:' && GAME_SERVER === location.host)) ? 'http://' : 'https://') + GAME_SERVER : '';
         const SERVER_WS = SERVER_HTTP.replace(/^http/, 'ws') + '/';
         let worldId = 'w1';
         try { worldId = localStorage.getItem('nw_world') || 'w1'; } catch (e) {}
