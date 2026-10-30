@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Проверка сервера Nature Walk</title>
+<style>
+body{font:16px/1.45 system-ui,sans-serif;margin:0;padding:18px;background:#10201a;color:#e8f3ec;max-width:640px;margin-inline:auto}
+h1{font-size:20px;margin:0 0 6px} p{margin:6px 0;color:#b9d2c3}
+textarea{width:100%;box-sizing:border-box;min-height:96px;font:15px monospace;padding:10px;border-radius:8px;border:1px solid #3c6b52;background:#0b1712;color:#e8f3ec}
+button{margin-top:10px;padding:12px 18px;font:600 16px system-ui;border:0;border-radius:8px;background:#e8b923;color:#222}
+.r{margin-top:10px;padding:10px 12px;border-radius:8px;background:#183226;word-break:break-all}
+.ok{border-left:6px solid #4cd07d}.bad{border-left:6px solid #ff6b5e}.wait{border-left:6px solid #888}
+</style></head><body>
+<h1>Проверка сервера Nature Walk</h1>
+<p>Впиши адреса серверов (по одному в строке, без https://). Страница попробует достучаться до каждого с твоего телефона или компьютера, без VPN.</p>
+<textarea id="h" spellcheck="false">game-1-nsep.onrender.com</textarea>
+<button id="go">Проверить</button>
+<div id="out"></div>
+<p>✅ — адрес отвечает, игра будет работать. ❌ — не открылся за 12 секунд: скорее всего, провайдер его блокирует. Первый запуск бесплатного Render может занять до минуты, поэтому при ❌ нажми «Проверить» ещё раз.</p>
+<script>
+const out=document.getElementById('out'), ta=document.getElementById('h');
+const qp=new URLSearchParams(location.search).get('h'); if(qp) ta.value=qp.split(',').join('\n');
+async function test(host){
+  const d=document.createElement('div'); d.className='r wait'; d.textContent='⏳ '+host+' — проверяю…'; out.appendChild(d);
+  const t0=performance.now(), ctl=new AbortController(), tm=setTimeout(()=>ctl.abort(),12000);
+  try{ await fetch('https://'+host+'/health?_='+Date.now(),{mode:'no-cors',cache:'no-store',signal:ctl.signal}); clearTimeout(tm);
+    d.className='r ok'; d.textContent='✅ '+host+' — отвечает ('+Math.round(performance.now()-t0)+' мс)';
+  }catch(e){ clearTimeout(tm); d.className='r bad'; d.textContent='❌ '+host+' — '+(e.name==='AbortError'?'не ответил за 12 секунд':'соединение не удалось')+' ('+Math.round(performance.now()-t0)+' мс)'; }
+}
+document.getElementById('go').onclick=()=>{ out.innerHTML=''; ta.value.split(/[\s,]+/).map(s=>s.trim().replace(/^https?:\/\//,'').replace(/\/+$/,'')).filter(Boolean).forEach(test); };
+if(qp) document.getElementById('go').click();
+</script></body></html>
