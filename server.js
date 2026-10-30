@@ -644,7 +644,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && (url === '/register' || url === '/login')) { handleAuth(req, res, url.slice(1)); return; }
     if (url === '/health') { // по этому адресу видно, где сервер хранит данные
         res.writeHead(200, { ...CORS, 'Content-Type': 'text/plain; charset=utf-8' });
-        res.end('ok\nготов: ' + (storageReady ? 'да' : 'нет, хранилище ещё не загрузилось') + '\nхранилище: ' + ((UPSTASH_URL && UPSTASH_TOKEN) ? 'Upstash (данные переживут перезапуск)' : (process.env.RENDER ? 'ТОЛЬКО ФАЙЛ — при перезапуске Render данные и аккаунты СТИРАЮТСЯ' : 'файл на диске сервера (данные переживут перезапуск)')) + '\nаккаунтов: ' + accByName.size + '\nработает без перезапуска: ' + Math.round(process.uptime() / 60) + ' мин (если число маленькое — сервер недавно перезапускался)\nсейчас подключено: ' + allConns.size);
+        res.end('ok\nготов: ' + (storageReady ? 'да' : 'нет, хранилище ещё не загрузилось') + '\nхранилище: ' + ((UPSTASH_URL && UPSTASH_TOKEN) ? 'Upstash (данные переживут перезапуск)' : ((process.env.RENDER || process.env.SPACE_ID) ? 'ТОЛЬКО ФАЙЛ — при перезапуске сервера данные и аккаунты СТИРАЮТСЯ' : 'файл на диске сервера (данные переживут перезапуск)')) + '\nаккаунтов: ' + accByName.size + '\nработает без перезапуска: ' + Math.round(process.uptime() / 60) + ' мин (если число маленькое — сервер недавно перезапускался)\nсейчас подключено: ' + allConns.size);
         return;
     }
     if (url === '/' || url === '/index.html') {
@@ -698,7 +698,7 @@ async function loadAll() {
 }
 
 async function main() {
-    if (process.env.RENDER && !(UPSTASH_URL && UPSTASH_TOKEN)) console.warn('ВНИМАНИЕ: Upstash не подключён — аккаунты и мир хранятся в файле и пропадут при перезапуске сервера на Render!');
+    if ((process.env.RENDER || process.env.SPACE_ID) && !(UPSTASH_URL && UPSTASH_TOKEN)) console.warn('ВНИМАНИЕ: Upstash не подключён — аккаунты и мир хранятся в файле и пропадут при перезапуске сервера на Render!');
     await Promise.race([loadAll(), new Promise(r => setTimeout(r, 15000))]); // Render ждёт открытый порт — если база отвечает долго, открываем порт и догружаем в фоне
     server.listen(PORT, () => console.log('Игровой сервер запущен на порту ' + PORT + ' (миров: ' + worlds.size + ', до ' + MAX_PLAYERS + ' игроков в каждом)'));
 }

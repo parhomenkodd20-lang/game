@@ -44,3 +44,11 @@ curl -fsSL https://raw.githubusercontent.com/parhomenkodd20-lang/game/main/deplo
 ## Запуск на своём компьютере или телефоне (Termux)
 
 `node server.js` — слушает порт 8080 (или `PORT`). Игра будет на `http://localhost:8080`.
+
+## Бесплатный запасной вариант: Hugging Face Spaces
+
+Если Render у игроков не открывается, можно поднять сервер на Hugging Face (бесплатно, без карты). Это эксперимент: заранее неизвестно, открывается ли `hf.space` у конкретного оператора.
+1. Зарегистрируйся на huggingface.co → New → Space → SDK: **Docker** → Blank → Public → Create Space.
+2. Во вкладке Files → Add file → Upload files: загрузи `server.js`, `index.html`, `package.json`, а также `Dockerfile` и `README.md` из папки `deploy/huggingface` (они заменяют корневой README Space).
+3. В Settings Space → Variables and secrets добавь секреты `UPSTASH_REDIS_REST_URL` и `UPSTASH_REDIS_REST_TOKEN` (без них мир и аккаунты стираются при перезапуске).
+4. Когда Space соберётся (Running), открой прямую ссылку вида `https://имя-пользователя-имя-space.hf.space/` — по ней и играют.
